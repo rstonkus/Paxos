@@ -54,7 +54,7 @@ let main argv =
       let () = proposer.PState <- s'
       Option.map wrapP out |> Option.iter outputBuffer.Enqueue
     | (BroadcastAcceptors, PMsg (MPrepare (n,key))) ->
-      
+      ()
     | (Proposer d, AMsg (MPromise (n,vv))) -> ()
     | (BroadcastAcceptors, PMsg (MAccept (n,key,v))) -> ()
     | (BroadcastProposersLearners, AMsg m) -> ()
