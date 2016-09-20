@@ -5,6 +5,8 @@ VisualStudioVersion = 14.0.23107.0
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "Paxos", "Paxos\Paxos.fsproj", "{38E7E0E5-42CA-4876-86F8-4812F3A34E69}"
 EndProject
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "PaxosLocalTest", "PaxosLocalTest\PaxosLocalTest.fsproj", "{AF508D8E-174C-4CFE-A50D-267B1FE302A9}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -15,6 +17,10 @@ Global
 		{38E7E0E5-42CA-4876-86F8-4812F3A34E69}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{38E7E0E5-42CA-4876-86F8-4812F3A34E69}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{38E7E0E5-42CA-4876-86F8-4812F3A34E69}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AF508D8E-174C-4CFE-A50D-267B1FE302A9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AF508D8E-174C-4CFE-A50D-267B1FE302A9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AF508D8E-174C-4CFE-A50D-267B1FE302A9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AF508D8E-174C-4CFE-A50D-267B1FE302A9}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
