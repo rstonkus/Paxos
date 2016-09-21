@@ -133,7 +133,7 @@ module BasicPaxos =
   let latestValue (vs:(VersionedValue option) list) : VersionedValue option = 
     List.maxBy (fun v -> match v with None -> -1 | Some (n,_) -> n) vs
 
-  let proposerReceiveFromAcceptor (quorumSize:int) (s:PState) (m:AMsg) : (PState * (Destination * PMsg) Option) =
+  let proposerReceiveFromAcceptor (quorumSize:int) (s:PState) (m:AMsg) : (PState * (Destination * PMsg) option) =
     let ignore = (s,None)
     let nackClient s cr reason = 
       let ((guid,sender),_,_) = cr
@@ -181,6 +181,7 @@ module BasicPaxos =
         then nackClient (PWaiting n') cr "proposer behind"
         else ignore
 
+  //note that the client is modelled as running locally on the proposer 
   let proposerReceiveFromClient (s:PState) (m:CMsg) : (PState * (Destination * PMsg) Option) =
     let nackClient s cr reason = 
       let ((guid,sender),_,_) = cr
@@ -203,7 +204,7 @@ module BasicPaxos =
 //      | MForceReset -> nackClient (PWaiting n) cr "forced reset"
 
 
-  let acceptorReceiveFromProposer (AReady n:AState) (m:PMsg) (sender:Sender) (store:Store) : (AState * Store * (Destination * AMsg) Option) =
+  let acceptorReceiveFromProposer (AReady n:AState) (m:PMsg) (sender:Sender) (store:Store) : (AState * Store * (Destination * AMsg) option) =
     let ignore = (AReady n,store,None)
     match m with
     | MPrepare (n',valId) -> 
@@ -217,4 +218,3 @@ module BasicPaxos =
       else (AReady n, store, Some (Proposer sender, MNackPrepare n))
     | MClientNack _ -> ignore //not relevant for acceptor
 
-  
