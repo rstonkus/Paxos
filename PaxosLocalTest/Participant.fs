@@ -3,13 +3,21 @@
 open Paxos.BasicPaxos
 open System.Collections.Generic
 
+
+type Msg =
+  | AMsg of AMsg
+  | PMsg of PMsg
+  | LMsg of LMsg
+  | CMsg of CMsg
+
 module Participant =
+
+
   type Acceptor = 
     { Name : string
       mutable AState : AState 
       Output : Queue<Destination * Msg>
       Input : Queue<string * Msg>
-      mutable Store : Map<Key,VersionedValue>
     }
   type Proposer = 
     { Name : string

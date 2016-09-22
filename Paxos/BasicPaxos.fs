@@ -71,27 +71,28 @@ module BasicPaxos =
   type N = int
   type Value = string
   type Key = string
-  //For now the VersionState is shared by all keys. This is suboptimal if one wants more than one value in the system.
-  //It could be extended to support several concurrent keys (and adjusting the code accordingly): 
-  //type VersionState = Map<ValueId,N>
-  type VersionState = N
+
   type Sender = string
 
   type Destination =
     | Proposer of Sender
-    | BroadcastProposersLearners
+    | Broadcast
     | BroadcastAcceptors
     | Client of Sender
   
   type VersionedValue = N * Value
   type ClientRequest = (Guid * Sender) * Key * (VersionedValue option -> Value)
-  type Store = Map<Key,VersionedValue>
+  type AcceptorStore = Map<Key,VersionedValue>
+  
+  type LearnerStore = Map<Key,VersionedValue * (N * (Sender * Value) list)> //Sender is necessary in order to make sure that it is not a duplicate
+  
 
+  //Messages are split into different types depending on who sends them
   //client msgs
   type CMsg = 
     | MClientRequest of ClientRequest
-//  | MForceReset
 
+  //learner msgs
   type LMsg = 
     | MResponse of Value
 
@@ -101,49 +102,56 @@ module BasicPaxos =
     | MAccept of N * Key * Value //new value
     | MClientNack of Guid * string //guid, reason
 
-  //Msgs sent from acceptors
+  //acceptors msgs
   type AMsg = 
     //Sent in response to a Prepare to only the requesting proposer
     | MPromise of N * VersionedValue option //session n, versioned value stored on that particular node
+    //Broadcast to all proposers and learners in case of success
+    | MAccepted of N * Key * Value //this session, (value session (=this session), value)
     //Sent in response to a Prepare to only the requesting proposer
     //in case the acceptor is ahead of the proposed session n.
     | MNackPrepare of N //head n at acceptor (It will not accept smaller ns)
-    //Broadcast to all proposers and learners in case of success
-    | MAccepted of N * Key * Value //this session, (value session (=this session), value)
 
-  type Msg =
-    | AMsg of AMsg
-    | PMsg of PMsg
-    | LMsg of LMsg
-    | CMsg of CMsg
+
+
+  //For now the session state is shared by all keys. This is suboptimal if one wants more than one value in the system.
+  //It could be extended to support several concurrent keys (and adjusting the code accordingly): 
+  //Essentially: type PState = Map<Key,PStateOld>
+  //                  AState = Map<Key,AStateOld>
 
   type PState =
     //No session in progress. N = Last tried session that we know
-    | PWaiting of VersionState 
+    | PReady of N 
     //State of collecting promises in order to reach quorum
-    | PPrepareSent of VersionState * ClientRequest * (VersionedValue option) list // I sent proposal with n,v, received promise list so far
+    | PPrepareSent of N * ClientRequest * (VersionedValue option) list // I sent proposal with n,v, received promise list so far
     //State of collecting accepted messages 
-    | PAcceptSent of VersionState * ClientRequest * VersionedValue list// I sent accept with n,v, received accept list so far
+    | PAcceptSent of N * ClientRequest * VersionedValue list// I sent accept with n,v, received accept list so far
 
   type AState =
-    | AReady of VersionState //previous highest proposed
+    | AReady of N * AcceptorStore//previous highest proposed
 
+  type LState =
+    | LReady of LearnerStore
+
+
+  //helpers
   let isQuorum quorumSize xs = quorumSize > List.length xs
 
   let latestValue (vs:(VersionedValue option) list) : VersionedValue option = 
     List.maxBy (fun v -> match v with None -> -1 | Some (n,_) -> n) vs
 
+  //msg handlers
   let proposerReceiveFromAcceptor (quorumSize:int) (s:PState) (m:AMsg) : (PState * (Destination * PMsg) option) =
     let ignore = (s,None)
     let nackClient s cr reason = 
       let ((guid,sender),_,_) = cr
       in (s, Some (Client sender, MClientNack (guid, reason)))
     match s with
-    | PWaiting n -> //This session is initiated by another proposer
+    | PReady n -> //This session is initiated by another proposer
       match m with
       | MAccepted (n',_,_) -> 
         if (n' > n)
-        then (PWaiting n', None) //update session
+        then (PReady n', None) //update session
         else ignore
       | _ -> ignore //ignore all other msgs
     | PPrepareSent (n, cr, promises) ->
@@ -158,11 +166,11 @@ module BasicPaxos =
                   in (PAcceptSent(n, cr, []), Some (BroadcastAcceptors, MAccept(n,valId,v'))) //send accept
              else (PPrepareSent(n, cr, promises'), None) //wait for more promises
         else if (n < n')
-             then nackClient (PWaiting n') cr "proposer behind" //if it is newer we cancel session and up the n to the newest
+             then nackClient (PReady n') cr "proposer behind" //if it is newer we cancel session and up the n to the newest
              else (PPrepareSent (n, cr, promises), None) //it was an old one. Ignore
       | MAccepted _ -> ignore //Old => Ignore
       | MNackPrepare n' -> if (n < n')
-                           then nackClient (PWaiting n') cr "proposer behind" //The nack proposes a newer n. It does not matter if it was a response to this session directly. Abort.
+                           then nackClient (PReady n') cr "proposer behind" //The nack proposes a newer n. It does not matter if it was a response to this session directly. Abort.
                            else ignore //Old => Ignore. 
     | PAcceptSent (n, cr, accepts) ->
       match m with
@@ -171,50 +179,68 @@ module BasicPaxos =
         if (n = n') //it is an accept in this session initiated by me
         then let accepts' = (n,v) :: accepts
              if (isQuorum quorumSize accepts')
-             then (PWaiting n, None) //session done, assume learner will answer client.
+             then (PReady n, None) //session done, assume learner will answer client.
              else (PAcceptSent (n, cr, accepts), None)
         else if (n < n')
-             then nackClient (PWaiting n') cr "proposer behind" //if it is newer we cancel session and up the n to the newest
+             then nackClient (PReady n') cr "proposer behind" //if it is newer we cancel session and up the n to the newest
              else (PAcceptSent (n, cr, accepts), None) //it was an old one. Ignore
       | MNackPrepare n' -> 
         if (n < n')
-        then nackClient (PWaiting n') cr "proposer behind"
+        then nackClient (PReady n') cr "proposer behind"
         else ignore
 
+
   //note that the client is modelled as running locally on the proposer 
-  let proposerReceiveFromClient (s:PState) (m:CMsg) : (PState * (Destination * PMsg) Option) =
+  let proposerReceiveFromClient (s:PState) (MClientRequest cr:CMsg) : (PState * (Destination * PMsg) Option) =
     let nackClient s cr reason = 
       let ((guid,sender),_,_) = cr
       in (s, Some (Client sender, MClientNack (guid, reason)))
     match s with 
-    | PWaiting n ->
-      match m with
-      | MClientRequest cr -> 
-        let n' = n+1
-        let (_,valId,_) = cr
-        in (PPrepareSent (n',cr,[]), Some (BroadcastAcceptors, MPrepare (n',valId)))
-//      | MForceReset -> (s, None) //already waiting
-    | PPrepareSent (n,cr,_) -> 
-      match m with
-      | MClientRequest cr' -> nackClient s cr' "busy" //This is not meant to happen. The client is local, so requests should be buffered and only sent, when proposer is PWaiting.
-//      | MForceReset -> nackClient (PWaiting n) cr "forced reset"
-    | PAcceptSent (n,cr,_) -> 
-      match m with
-      | MClientRequest cr' -> nackClient s cr' "busy"
-//      | MForceReset -> nackClient (PWaiting n) cr "forced reset"
+    | PReady n ->
+      let n' = n+1
+      let (_,k,_) = cr
+      in (PPrepareSent (n',cr,[]), Some (BroadcastAcceptors, MPrepare (n',k)))
+    //These are not meant to happen. Since the client is local, requests should be buffered and 
+    //only sent, when proposer is PReady.
+    | PPrepareSent _ -> nackClient s cr "busy"
+    | PAcceptSent _ -> nackClient s cr "busy"
+    
 
-
-  let acceptorReceiveFromProposer (AReady n:AState) (m:PMsg) (sender:Sender) (store:Store) : (AState * Store * (Destination * AMsg) option) =
-    let ignore = (AReady n,store,None)
+  let acceptorReceiveFromProposer (AReady (n,store):AState) (m:PMsg) (sender:Sender) : (AState * (Destination * AMsg) option) =
+    let ignore = (AReady (n,store), None)
     match m with
-    | MPrepare (n',valId) -> 
+    | MPrepare (n',k) -> 
       if (n <= n')
-      then (AReady n', store, Some (Proposer sender, MPromise (n', Map.tryFind valId store)))
-      else (AReady n', store, Some (Proposer sender, MNackPrepare n))
-    | MAccept (n',valId',v') ->
+      then (AReady (n', store), Some (Proposer sender, MPromise (n', Map.tryFind k store)))
+      else (AReady (n', store), Some (Proposer sender, MNackPrepare n))
+    | MAccept (n',k',v') ->
       if (n <= n') 
-      then let store' = Map.add valId' (n',v') store
-            in (AReady n', store', Some (BroadcastProposersLearners, MAccepted (n, valId', v')))
-      else (AReady n, store, Some (Proposer sender, MNackPrepare n))
+      then let store' = Map.add k' (n',v') store
+            in (AReady (n', store'), Some (Broadcast, MAccepted (n, k', v')))
+      else (AReady (n, store), Some (Proposer sender, MNackPrepare n))
     | MClientNack _ -> ignore //not relevant for acceptor
 
+
+  let learnerReceiveFromAcceptor (LReady (store,quorumStore) : LState) (m:AMsg) (sender:Sender) (quorumSize:int): (LState * (Destination * LMsg) option) = 
+    let ignore = (LReady (store,quorumStore), None)
+    match m with
+    | MAccepted (n', k', v') -> 
+      let quorumStoreV = Map.tryFind k' quorumStore
+      match quorumStoreV with
+      | None -> 
+        let quorumStore' = Map.add k' (n',v')
+        in (LReady (store, quorumStore), None) //never quorum with just one
+      | Some (n,votes) -> 
+        if (n == n')
+        then if (List.exists ((=) sender') votes)
+             then ignore //duplicate msg
+             else let votes' = (n',v') :: votes
+                  let quorumStore' = Map.add k' votes' quorumStore
+                  if (isQuorum quorumSize votes')
+                  then let store' = 
+        else if (n' > n) //it is newer
+                               
+    | MPromise _ -> ignore
+    | MNackPrepare _ -> ignore
+    
+    //TODO need to handle at least once delivery

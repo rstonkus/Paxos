@@ -11,8 +11,8 @@ let main argv =
       Participant.Acceptor { Name = "acceptor1"; AState = AReady 0;   Output = Queue<Destination*Msg>(); Input = Queue<string * Msg>(); Store = Map.empty};
       Participant.Acceptor { Name = "acceptor2"; AState = AReady 0;   Output = Queue<Destination*Msg>(); Input = Queue<string * Msg>(); Store = Map.empty};
       Participant.Acceptor { Name = "acceptor3"; AState = AReady 0;   Output = Queue<Destination*Msg>(); Input = Queue<string * Msg>(); Store = Map.empty};
-      Participant.Proposer { Name = "proposer1"; PState = PWaiting 0; Output = Queue<Destination*Msg>(); Input = Queue<string * Msg>() };
-      Participant.Proposer { Name = "proposer2"; PState = PWaiting 0; Output = Queue<Destination*Msg>(); Input = Queue<string * Msg>() };
+      Participant.Proposer { Name = "proposer1"; PState = PReady 0; Output = Queue<Destination*Msg>(); Input = Queue<string * Msg>() };
+      Participant.Proposer { Name = "proposer2"; PState = PReady 0; Output = Queue<Destination*Msg>(); Input = Queue<string * Msg>() };
       Participant.Learner  { Name = "learner1";  LState = ();         Output = Queue<Destination*Msg>(); Input = Queue<string * Msg>() };
       Participant.Learner  { Name = "learner2";  LState = ();         Output = Queue<Destination*Msg>(); Input = Queue<string * Msg>() };
       Participant.Client   { Name = "client1";                        Output = Queue<Destination*Msg>(); Input = Queue<string * Msg>() };

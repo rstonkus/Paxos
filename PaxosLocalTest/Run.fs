@@ -2,22 +2,30 @@
 
 open Paxos.BasicPaxos
 open Paxos.BasicPaxos.Test
+open System.Collections.Generic
 
+
+//Ideas for testing
+// - Reset nodes
+// - Node outage
 module Run =
   //puts the msg in the right input queue
   let sendMsg participants sender m = 
     let sendP msg d = Participant.iterP d participants (fun x -> x.Input.Enqueue (sender,msg))
     let sendC msg d = Participant.iterC d participants (fun x -> x.Input.Enqueue (sender,msg))
     let broadcastA msg = Participant.iterAllA participants (fun x -> x.Input.Enqueue (sender,msg))
-    let broadcastPL msg = 
-      do Participant.iterAllP participants (fun x -> x.Input.Enqueue (sender,msg))
-         Participant.iterAllL participants (fun x -> x.Input.Enqueue (sender,msg))
+    let broadcastP msg = Participant.iterAllP participants (fun x -> x.Input.Enqueue (sender,msg))
+    let broadcastL msg = Participant.iterAllL participants (fun x -> x.Input.Enqueue (sender,msg))
+    let broadcast msg = 
+      do broadcastA msg
+         broadcastP msg
+         broadcastL msg
     match m with
     | (Proposer d, (CMsg (MClientRequest _) as msg)) -> sendP msg d
     | (BroadcastAcceptors, (PMsg (MPrepare _) as msg)) -> broadcastA msg
     | (Proposer d, (AMsg (MPromise _) as msg)) -> sendP msg d
     | (BroadcastAcceptors, (PMsg (MAccept _) as msg)) -> broadcastA msg
-    | (BroadcastProposersLearners, (AMsg (MAccepted _) as msg)) -> broadcastPL msg
+    | (Broadcast, (AMsg (MAccepted _) as msg)) -> broadcast msg
     | (Client d, (LMsg (MResponse _) as msg)) -> sendC msg d
     | (Client d, (PMsg (MClientNack _) as msg)) -> sendC msg d
     | _ -> failwithf "bad message destination %A" m
@@ -32,9 +40,8 @@ module Run =
     | Participant.Acceptor a ->
       let (sender, msg) = a.Input.Dequeue ()
       in match msg with
-         | PMsg pmsg -> let (s',store',outMsgO) = acceptorReceiveFromProposer a.AState pmsg sender a.Store
+         | PMsg pmsg -> let (s',outMsgO) = acceptorReceiveFromProposer a.AState pmsg sender
                         do outMsgO |> Option.map wrapA |> Option.iter (sendMsg participants a.Name)
-                           a.Store <- store'
                            a.AState <- s'
          | _ -> failwithf "Acceptor received unexpected message %A" msg
     | Participant.Proposer p ->
