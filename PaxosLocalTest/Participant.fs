@@ -27,7 +27,7 @@ module Participant =
     }
   type Learner = 
     { Name : string
-      mutable LState : unit 
+      mutable LState : LState
       Output : Queue<Destination * Msg>
       Input : Queue<string * Msg>
     }
