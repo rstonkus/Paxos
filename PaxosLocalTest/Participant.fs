@@ -11,34 +11,41 @@ type Msg =
   | CMsg of CMsg
 
 module Participant =
-
-
   type Acceptor = 
-    { Name : string
-      mutable AState : AState 
+    { 
+      Name : string
       Output : Queue<Destination * Msg>
       Input : Queue<string * Msg>
+      mutable AState : AState 
+      mutable CrashedFor : int
     }
   type Proposer = 
-    { Name : string
-      mutable PState : PState 
+    { 
+      Name : string
       Output : Queue<Destination * Msg>
       Input : Queue<string * Msg>
+      mutable PState : PState
+      mutable CrashedFor : int
     }
   type Learner = 
-    { Name : string
-      mutable LState : LState
+    { 
+      Name : string
       Output : Queue<Destination * Msg>
       Input : Queue<string * Msg>
+      mutable LState : LState
+      mutable CrashedFor : int
     }
   type Client = 
-    { Name : string
+    { 
+      Name : string
       Output : Queue<Destination * Msg>
       Input : Queue<string * Msg>
     }
+
+  
   type Type = 
   | AcceptorT
-  | ProposerT 
+  | ProposerT
   | LearnerT
   | ClientT
 
@@ -48,15 +55,53 @@ module Participant =
     | Learner of Learner
     | Client of Client
 
-  let acceptor a = match a with | (Acceptor x) -> Some x | _ -> None
-  let proposer a = match a with | (Proposer x) -> Some x | _ -> None
-  let learner a = match a with | (Learner x) -> Some x | _ -> None
-  let client a = match a with | (Client x) -> Some x | _ -> None
+  let proposer name = 
+    Proposer { 
+      Name = name; 
+      Output = Queue<Destination*Msg>(); 
+      Input = Queue<string * Msg>(); 
+      CrashedFor = 0
+      PState = PReady 0; 
+    }
+  let acceptor name = 
+    Acceptor { 
+      Name = name; 
+      Output = Queue<Destination*Msg>(); 
+      Input = Queue<string * Msg>(); 
+      CrashedFor = 0 
+      AState = AReady (0,Map.empty);
+    }
+  let learner name = 
+    Learner {
+      Name = name; 
+      Output = Queue<Destination*Msg>(); 
+      Input = Queue<string * Msg>(); 
+      CrashedFor = 0 
+      LState = LReady Map.empty;
+    }
+  let client name = 
+    Client { 
+      Name = name;   
+      Output = Queue<Destination*Msg>(); 
+      Input = Queue<string * Msg>();                                
+    };
+
+  let tryAcceptor a = match a with | (Acceptor x) -> Some x | _ -> None
+  let tryProposer a = match a with | (Proposer x) -> Some x | _ -> None
+  let tryLearner a = match a with | (Learner x) -> Some x | _ -> None
+  let tryClient a = match a with | (Client x) -> Some x | _ -> None
   
-  let isAcceptor = acceptor >> Option.isSome
-  let isProposer = proposer >> Option.isSome
-  let isLearner = learner >> Option.isSome
-  let isClient = client >> Option.isSome
+  let isAcceptor = tryAcceptor >> Option.isSome
+  let isProposer = tryProposer >> Option.isSome
+  let isLearner = tryLearner >> Option.isSome
+  let isClient = tryClient >> Option.isSome
+  let isParticipantType pt p =
+    match (pt,p) with 
+    | (AcceptorT, Acceptor _) -> true
+    | (ProposerT, Proposer _) -> true
+    | (LearnerT, Learner _) -> true
+    | (ClientT, Client _) -> true
+    | (_,_) -> false
 
   let output p = 
     match p with 
@@ -78,28 +123,62 @@ module Participant =
     | Proposer x -> x.Name
     | Learner x -> x.Name
     | Client x -> x.Name
-    
+
+  let crashFor p rounds = 
+    match p with 
+    | Acceptor x -> x.CrashedFor <- rounds
+    | Proposer x -> x.CrashedFor <- rounds
+    | Learner x -> x.CrashedFor <- rounds
+    | Client x -> ()
+
+  let isCrashed p = 
+    match p with 
+    | Acceptor x -> x.CrashedFor > 0
+    | Proposer x -> x.CrashedFor > 0
+    | Learner x -> x.CrashedFor > 0
+    | Client x -> false
+  
+  let decCrashedFor p = 
+    match p with 
+    | Acceptor x -> x.CrashedFor <- x.CrashedFor - 1
+    | Proposer x -> x.CrashedFor <- x.CrashedFor - 1
+    | Learner x -> x.CrashedFor <- x.CrashedFor - 1
+    | Client x -> ()
+  
+  let find d ps = ps |> Seq.filter (fun a -> name a = d) |> Seq.head
+  let findClient d ps = 
+    ps 
+    |> Seq.filter (fun p -> name p = d) 
+    |> Seq.map (fun p -> match p with Client c -> c | _ -> failwith "not a client")
+    |> Seq.exactlyOne
+  
+  let allA ps =
+    ps
+    |> Seq.filter isAcceptor
+    |> Seq.map (fun p -> match p with Acceptor a -> a | _ -> failwith "not an acceptor")
+
+  let sendTo m p =
+    if (isCrashed p) 
+    then ()
+    else (input p).Enqueue m
+
+  let sendToDest m d ps =
+    let p = find d ps
+    sendTo m p
+
+  let broadcast ps m =
+    ps 
+    |> Seq.filter (fun p -> isAcceptor p || isProposer p || isLearner p)
+    |> Seq.iter (sendTo m)
+
+  let broadcastA ps m =
+    ps 
+    |> Seq.filter isAcceptor 
+    |> Seq.iter (sendTo m)
+
   let findName n xs =
     match Seq.tryFind (fun x -> name x = n) xs with
     | None -> failwithf "no such destination %A" n
     | Some s -> s
 
-  let allA ps = Seq.choose acceptor ps
-  let allP ps = Seq.choose proposer ps
-  let allL ps = Seq.choose learner ps
-  let allC ps = Seq.choose client ps
 
-  let findA d ps = allA ps |> Seq.filter (fun a -> a.Name = d) |> Seq.head
-  let findP d ps = allP ps |> Seq.filter (fun a -> a.Name = d) |> Seq.head
-  let findL d ps = allL ps |> Seq.filter (fun a -> a.Name = d) |> Seq.head
-  let findC d ps = allC ps |> Seq.filter (fun a -> a.Name = d) |> Seq.head
-    
-
-  let iterA d ps f = findA d ps |> f
-  let iterP d ps f = findP d ps |> f
-  let iterL d ps f = findL d ps |> f
-  let iterC d ps f = findC d ps |> f
-
-  let iterAllA ps f = allA ps |> Seq.iter f
-  let iterAllP ps f = allP ps |> Seq.iter f
-  let iterAllL ps f = allL ps |> Seq.iter f

@@ -67,6 +67,10 @@ module BasicPaxos =
 //     |<---------------------------------X--X  Response
 //     |         |          |  |  |       |  |
 
+//TODO 
+// retry in proposer
+// handle at least once delivery (or argue that we dont need it)
+// timeout
   
   type N = int
   type Value = string
@@ -111,7 +115,7 @@ module BasicPaxos =
     | MAccepted of N * ClientSession * Key * Value //this session, (value session (=this session), value)
     //Sent in response to a Prepare to only the requesting proposer
     //in case the acceptor is ahead of the proposed session n.
-    | MNackPrepare of N //head n at acceptor (It will not accept smaller ns)
+    | MNackPrepare of N * N//session n, head n at acceptor (It will not accept smaller ns)
 
 
 
@@ -148,6 +152,12 @@ module BasicPaxos =
     let nackClient s cr reason = 
       let ((guid,sender),_,_) = cr
       in (s, Some (Client sender, MClientNack (guid, reason)))
+    let nackPrepare cr n n' newN =
+      if (n = n')
+      then if(newN > n)
+            then nackClient (PReady newN) cr "proposer behind" //The nack proposes a newer n. It does not matter if it was a response to this session directly. Abort.
+            else nackClient s cr "proposer behind"
+      else ignore //Different session (old, since it is a response) => Ignore. 
     match s with
     | PReady n -> //This session is initiated by another proposer
       match m with
@@ -171,9 +181,7 @@ module BasicPaxos =
              then nackClient (PReady n') cr "proposer behind" //if it is newer we cancel session and up the n to the newest
              else ignore //it was an old one. Ignore
       | MAccepted _ -> ignore //Old => Ignore
-      | MNackPrepare n' -> if (n < n')
-                           then nackClient (PReady n') cr "proposer behind" //The nack proposes a newer n. It does not matter if it was a response to this session directly. Abort.
-                           else ignore //Old => Ignore. 
+      | MNackPrepare (n',newN) -> nackPrepare cr n n' newN
     | PAcceptSent (n, cr, accepts) ->
       match m with
       | MPromise _ -> ignore //either from another session, or a promise that was not needed for this one. Ignore
@@ -186,10 +194,7 @@ module BasicPaxos =
         else if (n < n')
              then nackClient (PReady n') cr "proposer behind" //if it is newer we cancel session and up the n to the newest
              else ignore //it was an old one. Ignore
-      | MNackPrepare n' -> 
-        if (n < n')
-        then nackClient (PReady n') cr "proposer behind"
-        else ignore
+      | MNackPrepare (n',newN) -> nackPrepare cr n n' newN
 
 
   //note that the client is modelled as running locally on the proposer 
@@ -212,14 +217,14 @@ module BasicPaxos =
     let ignore = (AReady (n,store), None)
     match m with
     | MPrepare (n',k) -> 
-      if (n <= n')
+      if (n < n')
       then (AReady (n', store), Some (Proposer sender, MPromise (n', Map.tryFind k store)))
-      else (AReady (n', store), Some (Proposer sender, MNackPrepare n))
+      else (AReady (n', store), Some (Proposer sender, MNackPrepare (n',n)))
     | MAccept (n',cs, k',v') ->
       if (n <= n') 
       then let store' = Map.add k' (n',v') store
            in (AReady (n', store'), Some (Broadcast, MAccepted (n, cs, k', v')))
-      else (AReady (n, store), Some (Proposer sender, MNackPrepare n))
+      else (AReady (n, store), Some (Proposer sender, MNackPrepare (n',n)))
     | MClientNack _ -> ignore //not relevant for acceptor
 
   let acceptorReceiveFromAcceptor (AReady (n,store):AState) (m:AMsg) (sender:Sender) : (AState * (Destination * AMsg) option) =
@@ -249,4 +254,3 @@ module BasicPaxos =
     | MPromise _ -> ignore
     | MNackPrepare _ -> ignore
     
-    //TODO need to handle at least once delivery
