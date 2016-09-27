@@ -71,6 +71,7 @@ module BasicPaxos =
 // retry in proposer
 // handle at least once delivery (or argue that we dont need it)
 // timeout
+// replication to acceptor when starting up
   
   type N = int
   type Value = string
@@ -140,7 +141,7 @@ module BasicPaxos =
 
 
   //helpers
-  let isQuorum quorumSize xs = quorumSize <= List.length xs
+  let isQuorum quorumSize xs = quorumSize <= Seq.length xs
 
   let latestValue (vs:(VersionedValue option) list) : VersionedValue option = 
     List.maxBy (fun v -> match v with None -> -1 | Some (n,_) -> n) vs
@@ -148,16 +149,20 @@ module BasicPaxos =
   //msg handlers
   let proposerReceiveFromAcceptor (quorumSize:int) (s:PState) (m:AMsg) : (PState * (Destination * PMsg) option) =
     let ignore = (s,None)
+    let retry cr n = 
+      let (_,k,_) = cr
+      in (PPrepareSent (n,cr,[]), Some (BroadcastAcceptors, MPrepare (n,k)))
     //for now, we will push the action of retrying to the client.
-    let nackClient s cr reason = 
-      let ((guid,sender),_,_) = cr
-      in (s, Some (Client sender, MClientNack (guid, reason)))
-    let nackPrepare cr n n' newN =
-      if (n = n')
-      then if(newN > n)
-            then nackClient (PReady newN) cr "proposer behind" //The nack proposes a newer n. It does not matter if it was a response to this session directly. Abort.
-            else nackClient s cr "proposer behind"
-      else ignore //Different session (old, since it is a response) => Ignore. 
+//    let nackClient s cr reason = 
+//      let ((guid,sender),_,_) = cr
+//      in (s, Some (Client sender, MClientNack (guid, reason)))
+//    let nackPrepare cr n n' newN =
+//      if (n = n')
+//      then if(newN > n)
+//            then nackClient (PReady newN) cr "proposer behind" //The nack proposes a newer n. It does not matter if it was a response to this session directly. Abort.
+//            else nackClient s cr "proposer behind"
+//      else ignore //Different session (old, since it is a response) => Ignore. 
+    
     match s with
     | PReady n -> //This session is initiated by another proposer
       match m with
@@ -177,11 +182,9 @@ module BasicPaxos =
                   let v' = f maxV
                   in (PAcceptSent(n, cr, []), Some (BroadcastAcceptors, MAccept(n,cs,k,v'))) //send accept
              else (PPrepareSent(n, cr, promises'), None) //wait for more promises
-        else if (n < n')
-             then nackClient (PReady n') cr "proposer behind" //if it is newer we cancel session and up the n to the newest
-             else ignore //it was an old one. Ignore
+        else ignore //it can only be an old one, since it is a response to a request sent by us. Ignore
       | MAccepted _ -> ignore //Old => Ignore
-      | MNackPrepare (n',newN) -> nackPrepare cr n n' newN
+      | MNackPrepare (n',newN) -> retry cr (newN+1)
     | PAcceptSent (n, cr, accepts) ->
       match m with
       | MPromise _ -> ignore //either from another session, or a promise that was not needed for this one. Ignore
@@ -192,9 +195,9 @@ module BasicPaxos =
              then (PReady n, None) //session done, assume learner will answer client.
              else (PAcceptSent (n,cr,accepts'), None) //collect accept
         else if (n < n')
-             then nackClient (PReady n') cr "proposer behind" //if it is newer we cancel session and up the n to the newest
+             then retry cr (n' + 1)
              else ignore //it was an old one. Ignore
-      | MNackPrepare (n',newN) -> nackPrepare cr n n' newN
+      | MNackPrepare (n',newN) -> ignore //it could have only come from an old session
 
 
   //note that the client is modelled as running locally on the proposer 
