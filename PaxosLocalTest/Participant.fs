@@ -55,35 +55,39 @@ module Participant =
     | Learner of Learner
     | Client of Client
 
+  let freshAState = AReady (0,Map.empty)
+  let freshPState = PReady 0
+  let freshLState = LReady Map.empty
+
   let proposer name = 
     Proposer { 
-      Name = name; 
-      Output = Queue<Destination*Msg>(); 
-      Input = Queue<string * Msg>(); 
+      Name = name
+      Output = Queue<Destination*Msg>()
+      Input = Queue<string * Msg>()
       CrashedFor = 0
-      PState = PReady 0; 
+      PState = freshPState
     }
   let acceptor name = 
     Acceptor { 
       Name = name; 
       Output = Queue<Destination*Msg>(); 
       Input = Queue<string * Msg>(); 
-      CrashedFor = 0 
-      AState = AReady (0,Map.empty);
+      CrashedFor = 0;
+      AState = freshAState;
     }
   let learner name = 
     Learner {
-      Name = name; 
-      Output = Queue<Destination*Msg>(); 
-      Input = Queue<string * Msg>(); 
+      Name = name
+      Output = Queue<Destination*Msg>()
+      Input = Queue<string * Msg>()
       CrashedFor = 0 
-      LState = LReady Map.empty;
+      LState = freshLState
     }
   let client name = 
     Client { 
-      Name = name;   
-      Output = Queue<Destination*Msg>(); 
-      Input = Queue<string * Msg>();                                
+      Name = name
+      Output = Queue<Destination*Msg>()
+      Input = Queue<string * Msg>()
     };
 
   let tryAcceptor a = match a with | (Acceptor x) -> Some x | _ -> None
@@ -176,9 +180,5 @@ module Participant =
     |> Seq.filter isAcceptor 
     |> Seq.iter (sendTo m)
 
-  let findName n xs =
-    match Seq.tryFind (fun x -> name x = n) xs with
-    | None -> failwithf "no such destination %A" n
-    | Some s -> s
 
 

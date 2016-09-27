@@ -14,6 +14,21 @@ module Run =
       mutable Responses : (string * Sender * Msg) list 
     }
 
+  module Verify =
+    let responsesToGuid g result = 
+      let f (_,_,m) =
+        match m with
+        | LMsg (MResponse (guid,v)) -> 
+          if (g = guid)
+          then Some v
+          else None
+        | _ -> failwith "a msg from a non-learner sent the result"
+      result.Responses |> Seq.choose f
+  
+    let responsesToClient name result =
+      result.Responses |> Seq.filter (fun (n,_,_) -> n = name)
+
+
   let clientSend (client:Participant.Client) m =
     client.Output.Enqueue m
 
@@ -30,7 +45,6 @@ module Run =
     | (Proposer d, (AMsg (MNackPrepare _) as msg)) -> send msg d
     | (Broadcast, (AMsg (MAccepted _) as msg)) -> broadcast msg
     | (Client d, (LMsg (MResponse _) as msg)) -> send msg d
-    | (Client d, (PMsg (MClientNack _) as msg)) -> send msg d
     | _ -> failwithf "bad message destination %A" m
   
   let wrapA (d,m) = (d,AMsg m)
@@ -107,51 +121,36 @@ module Run =
     let mutable c = true
     while (c)
       do
-        let p1 = Participant.find "proposer1" participants
-        let p2 = Participant.find "proposer2" participants
         let (canHandle,canSend) = unfinished
-        match random.Next 3 with
-        //consume message
-        | 0 -> if (Array.isEmpty canHandle)
-               then ()
-               else let participant = pickRandom random canHandle
-                    consume participant 
+        match random.Next 6 with
+        //consume message -- 1 message consumed can result in 4 messages sent (broadcast -- assuming cluster size 3)
+        | 0 | 1 | 2 | 3 -> if (Array.isEmpty canHandle)
+                           then ()
+                           else let participant = pickRandom random canHandle
+                                consume participant 
         //send message
-        | 1 -> if (Array.isEmpty canSend)
+        | 4 -> if (Array.isEmpty canSend)
                then ()
                else let participant = pickRandom random canSend
                     let name = Participant.name participant
                     let outBuf = Participant.output participant
                     send name (outBuf.Dequeue ())
         | _ (*2*) -> //maybe do something evil
-          if (random.Next 20 <> 0) 
-          then () // P(evil) = 1/3 * 1/20 = 1/60
-          else match random.Next 2 with
-               //crash an acceptor for up to 100 rounds
-               | 0 -> let all =  Participant.allA participants
-                      let alive = all |> Seq.filter (fun a -> a.CrashedFor = 0) |> Seq.toArray
-                      if(Seq.length alive <= quorumSize) 
-                      then () //we cannot crash more according to assumptions
-                      else let toCrash = pickRandom random alive
-                           let rounds = random.Next 100
-                           printfn "XXX Crashing %s for %i rounds" toCrash.Name rounds
-                           toCrash.Input.Clear()
-                           toCrash.CrashedFor <- rounds
-               
-               //reset state
-               | _ -> ()
-//                 let p = pickRandom random participants
-//                 let q =  Participant.input p
-//                 let toDrop = random.Next (System.Math.Min (q.Count, 100))
-//                 if(toDrop = 0)
-//                 then ()
-//                 else printfn "XXX Dropping %i msgs from %s.input" toDrop (Participant.name p)
-//                      let mutable c = toDrop //max 3 messages
-//                      while (c > 0)
-//                        do let () = q.Dequeue () |> ignore //drop
-//                           c <- c - 1
-            
-
+          if (random.Next 20 <> 0)
+          then () // P(evil) = 1/5 * 1/20 = 1/100
+          else let all =  Participant.allA participants
+               let alive = all |> Seq.filter (fun a -> a.CrashedFor = 0) |> Seq.toArray
+               if(Seq.length alive <= quorumSize) 
+               then () //we cannot crash more according to assumptions
+               else let toCrash = pickRandom random alive
+                    let rounds = (random.Next 100) + 10 //at least 10 rounds
+                    printfn "XXX Crashing %s for %i rounds" toCrash.Name rounds
+                    toCrash.Input.Clear()
+                    toCrash.CrashedFor <- rounds
+                    if (random.Next 2 = 0)
+                    then printfn "XXX Reset state of %s" toCrash.Name
+                         toCrash.AState <- Participant.freshAState
+        let () = participants |> Seq.iter Participant.decCrashedFor
         unfinished <- unfinishedParticipants participants
         let (canHandle,canSend) = unfinished
         c <- not (Array.isEmpty canHandle) || not (Array.isEmpty canSend)

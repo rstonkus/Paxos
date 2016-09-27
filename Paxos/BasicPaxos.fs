@@ -106,7 +106,6 @@ module BasicPaxos =
   type PMsg =
     | MPrepare of N * Key
     | MAccept of N * ClientSession * Key * Value //new value
-    | MClientNack of Guid * string //guid, reason
 
   //acceptors msgs
   type AMsg = 
@@ -152,17 +151,6 @@ module BasicPaxos =
     let retry cr n = 
       let (_,k,_) = cr
       in (PPrepareSent (n,cr,[]), Some (BroadcastAcceptors, MPrepare (n,k)))
-    //for now, we will push the action of retrying to the client.
-//    let nackClient s cr reason = 
-//      let ((guid,sender),_,_) = cr
-//      in (s, Some (Client sender, MClientNack (guid, reason)))
-//    let nackPrepare cr n n' newN =
-//      if (n = n')
-//      then if(newN > n)
-//            then nackClient (PReady newN) cr "proposer behind" //The nack proposes a newer n. It does not matter if it was a response to this session directly. Abort.
-//            else nackClient s cr "proposer behind"
-//      else ignore //Different session (old, since it is a response) => Ignore. 
-    
     match s with
     | PReady n -> //This session is initiated by another proposer
       match m with
@@ -202,9 +190,6 @@ module BasicPaxos =
 
   //note that the client is modelled as running locally on the proposer 
   let proposerReceiveFromClient (s:PState) (MClientRequest cr:CMsg) : (PState * (Destination * PMsg) Option) =
-    let nackClient s cr reason = 
-      let ((guid,sender),_,_) = cr
-      in (s, Some (Client sender, MClientNack (guid, reason)))
     match s with 
     | PReady n ->
       let n' = n+1
@@ -212,12 +197,11 @@ module BasicPaxos =
       in (PPrepareSent (n',cr,[]), Some (BroadcastAcceptors, MPrepare (n',k)))
     //These are not meant to happen. Since the client is local, requests should be buffered and 
     //only sent, when proposer is PReady.
-    | PPrepareSent _ -> nackClient s cr "busy"
-    | PAcceptSent _ -> nackClient s cr "busy"
+    | PPrepareSent _ -> failwith "busy"
+    | PAcceptSent _ -> failwith "busy"
     
 
   let acceptorReceiveFromProposer (AReady (n,store):AState) (m:PMsg) (sender:Sender) : (AState * (Destination * AMsg) option) =
-    let ignore = (AReady (n,store), None)
     match m with
     | MPrepare (n',k) -> 
       if (n < n')
@@ -228,7 +212,6 @@ module BasicPaxos =
       then let store' = Map.add k' (n',v') store
            in (AReady (n', store'), Some (Broadcast, MAccepted (n, cs, k', v')))
       else (AReady (n, store), Some (Proposer sender, MNackPrepare (n',n)))
-    | MClientNack _ -> ignore //not relevant for acceptor
 
   let acceptorReceiveFromAcceptor (AReady (n,store):AState) (m:AMsg) (sender:Sender) : (AState * (Destination * AMsg) option) =
     let ignore = (AReady (n,store), None)
@@ -254,6 +237,7 @@ module BasicPaxos =
         else if (n > nStore)
              then firstVote k n //new vote round
              else ignore //old vote round
+    //these are not meant to be received by learner
     | MPromise _ -> ignore
     | MNackPrepare _ -> ignore
     
