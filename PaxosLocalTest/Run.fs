@@ -52,6 +52,9 @@ module Run =
   let wrapL (d,m) = (d,LMsg m)
   let wrapC (d,m) = (d,CMsg m)
 
+  let consumeRequest (p:Participant.Proposer) (MClientRequest cr) =
+    
+
   let consumeMsg debug quorumSize participants result (p:Participant.Participant) =
     match p with
     | Participant.Acceptor a ->
@@ -73,9 +76,10 @@ module Run =
       let () = if debug then printfn "%s <- %A state: %A" p.Name msg p.PState
       let r = 
         match msg with
-        | CMsg cmsg -> let (s',outMsgO) = proposerReceiveFromClient p.PState cmsg
-                       do outMsgO |> Option.map wrapP |> Option.iter (sendMsg participants p.Name)
-                          p.PState <- s'
+        | CMsg cmsg -> p.InputRequests.Enqueue cmsg
+//                       let (s',outMsgO) = proposerReceiveFromClient p.PState cmsg
+//                       do outMsgO |> Option.map wrapP |> Option.iter (sendMsg participants p.Name)
+//                          p.PState <- s'
         | AMsg amsg -> let (s',outMsgO) = proposerReceiveFromAcceptor quorumSize p.PState amsg
                        do outMsgO |> Option.map wrapP |> Option.iter (sendMsg participants p.Name)
                           p.PState <- s'
@@ -111,30 +115,45 @@ module Run =
     in (canHandle,canSend)
 
   let runToEnd (debug:bool) (random:System.Random) quorumSize participants result = 
-    let pickRandom (r:System.Random) xs =
+    let pickRandom xs =
       let length = Array.length xs
-      let i = r.Next length
+      let i = random.Next length
       in xs.[i]
     let consume = consumeMsg debug quorumSize participants result
     let send = sendMsg participants
     let mutable unfinished = unfinishedParticipants participants //not counting client inputs
     let mutable c = true
-    while (c)
+    while c
       do
         let (canHandle,canSend) = unfinished
         match random.Next 6 with
         //consume message -- 1 message consumed can result in 4 messages sent (broadcast -- assuming cluster size 3)
-        | 0 | 1 | 2 | 3 -> if (Array.isEmpty canHandle)
-                           then ()
-                           else let participant = pickRandom random canHandle
-                                consume participant 
+        | 0 | 1 | 2 | 3 -> 
+          if (Array.isEmpty canHandle)
+          then ()
+          else let participant = pickRandom canHandle
+               consume participant 
         //send message
-        | 4 -> if (Array.isEmpty canSend)
-               then ()
-               else let participant = pickRandom random canSend
-                    let name = Participant.name participant
-                    let outBuf = Participant.output participant
-                    send name (outBuf.Dequeue ())
+        | 4 -> 
+          if (Array.isEmpty canSend)
+          then ()
+          else let participant = pickRandom canSend
+               let name = Participant.name participant
+               let outBuf = Participant.output participant
+               send name (outBuf.Dequeue ())
+        | 5 -> 
+          let proposersWithWaitingReqs = 
+            participants 
+            |> Seq.choose Participant.tryProposer 
+            |> Seq.filter (fun p -> p.InputRequests.Count <> 0)
+            |> Seq.toArray
+          if (proposersWithWaitingReqs.Length <> 0)
+          then let p = pickRandom proposersWithWaitingReqs
+               let r = p.InputRequests.Dequeue ()               
+               consumeRequest p r
+          else ()
+
+          
         | _ (*2*) -> //maybe do something evil
           if (random.Next 20 <> 0)
           then () // P(evil) = 1/5 * 1/20 = 1/100

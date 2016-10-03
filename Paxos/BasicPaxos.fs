@@ -139,6 +139,7 @@ module BasicPaxos =
     | LReady of LearnerStore
 
 
+
   //helpers
   let isQuorum quorumSize xs = quorumSize <= Seq.length xs
 
@@ -172,7 +173,10 @@ module BasicPaxos =
              else (PPrepareSent(n, cr, promises'), None) //wait for more promises
         else ignore //it can only be an old one, since it is a response to a request sent by us. Ignore
       | MAccepted _ -> ignore //Old => Ignore
-      | MNackPrepare (n',newN) -> retry cr (newN+1)
+      | MNackPrepare (n',newN) -> 
+        if (n = n')
+        then retry cr (newN+1)
+        else ignore
     | PAcceptSent (n, cr, accepts) ->
       match m with
       | MPromise _ -> ignore //either from another session, or a promise that was not needed for this one. Ignore
@@ -185,7 +189,7 @@ module BasicPaxos =
         else if (n < n')
              then retry cr (n' + 1)
              else ignore //it was an old one. Ignore
-      | MNackPrepare (n',newN) -> ignore //it could have only come from an old session
+      | MNackPrepare _ -> ignore //it could have only come from an old session
 
 
   //note that the client is modelled as running locally on the proposer 

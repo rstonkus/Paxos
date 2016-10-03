@@ -24,6 +24,7 @@ module Participant =
       Name : string
       Output : Queue<Destination * Msg>
       Input : Queue<string * Msg>
+      InputRequests : Queue<CMsg>
       mutable PState : PState
       mutable CrashedFor : int
     }
@@ -64,6 +65,7 @@ module Participant =
       Name = name
       Output = Queue<Destination*Msg>()
       Input = Queue<string * Msg>()
+      InputRequests = Queue<CMsg>()
       CrashedFor = 0
       PState = freshPState
     }
