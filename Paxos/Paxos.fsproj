@@ -44,6 +44,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="AssemblyInfo.fs" />
+    <Compile Include="Queue.fs" />
     <Compile Include="BasicPaxos.fs" />
     <None Include="Script.fsx" />
   </ItemGroup>
