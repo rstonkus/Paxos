@@ -90,6 +90,7 @@ module BasicPaxos =
   type ClientRequest = ClientSession * Key * (VersionedValue option -> Value)
   type AcceptorStore = Map<Key,VersionedValue>
   
+  //TODO we must remember the old value when building up quorum for the new
   type LearnerStore = Map<Key, N * Sender list> //Sender is necessary in order to make sure that it is not a duplicate
   
 
@@ -149,7 +150,7 @@ module BasicPaxos =
   //msg handlers
   let proposerReceiveFromAcceptor (quorumSize:int) (s:PState) (m:AMsg) : (PState * (Destination * PMsg) option) =
     let ignore = (s,None)
-    let retry cr n = 
+    let retry cr n =
       let (_,k,_) = cr
       in (PPrepareSent (n,cr,[]), Some (BroadcastAcceptors, MPrepare (n,k)))
     match s with
@@ -214,7 +215,7 @@ module BasicPaxos =
     | MAccept (n',cs, k',v') ->
       if (n <= n') 
       then let store' = Map.add k' (n',v') store
-           in (AReady (n', store'), Some (Broadcast, MAccepted (n, cs, k', v')))
+           in (AReady (n', store'), Some (Broadcast, MAccepted (n', cs, k', v')))
       else (AReady (n, store), Some (Proposer sender, MNackPrepare (n',n)))
 
   let acceptorReceiveFromAcceptor (AReady (n,store):AState) (m:AMsg) (sender:Sender) : (AState * (Destination * AMsg) option) =

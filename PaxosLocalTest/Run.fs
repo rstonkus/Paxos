@@ -5,9 +5,58 @@ open Paxos.BasicPaxos.Test
 open System.Collections.Generic
 
 
-//Ideas for testing
-// - Reset nodes
-// - Node outage
+
+module Format =
+
+  let pState (s:PState) =
+    match s with
+    | PReady n -> sprintf "PReady %i" n
+    | PPrepareSent (n,cr,vvos) -> sprintf "PPrepareSent %i" n
+    | PAcceptSent (n,cr,vvs) -> sprintf "PPrepareSent %i" n
+
+  let aState (AReady (n,store):AState) =
+    sprintf "AReady %i, %A" n store
+
+  let lState (LReady store) =
+    sprintf "%A" store
+
+  let pMsg (m:PMsg) = 
+    match m with
+    | MPrepare (n,k) -> sprintf "MPrepare (%i,%s)" n k
+    | MAccept (n,_,k,v) -> sprintf "MAccept (%i,%s,%s)" n k v 
+
+  let aMsg (m:AMsg) =
+    match m with
+    | MPromise (n,vvo) -> sprintf "MPromise (%i,%A)" n vvo
+    | MAccepted (n,_,k,v) -> sprintf "MAccepted (%i,%s,%s)" n k v 
+    | MNackPrepare (n,n') -> sprintf "MNackPrepare (%i,%i)" n n' 
+
+  let lMsg (m:LMsg) =
+    match m with
+    | MResponse (g,v) -> sprintf "MResponse (%s,%s)" (g.ToString ()) v
+
+  let cMsg (m:CMsg) =
+    match m with
+    | MClientRequest ((g,s),k,f) -> sprintf "MClientRequest (%s,%s,%s)" (g.ToString()) s k
+
+  let msg (m:Msg) =
+    match m with
+    | AMsg x -> aMsg x
+    | PMsg x -> pMsg x
+    | LMsg x -> lMsg x
+    | CMsg x -> cMsg x
+
+  let participant (p:Participant.Participant) =  
+    let crashed c = (if c <> 0 then sprintf "XX%iXX " c else "")
+    match p with
+    | Participant.Proposer x -> sprintf "%s: inreq=%i, in=%i, out=%i, %s" x.Name x.InputRequests.Count x.Input.Count x.Output.Count (pState x.PState)
+    | Participant.Acceptor x -> sprintf "%s: %sin=%i, out=%i, %s" x.Name (crashed x.CrashedFor) x.Input.Count x.Output.Count (aState x.AState)
+    | Participant.Client x -> sprintf "%s: in=%i, out=%i" x.Name x.Input.Count x.Output.Count
+    | Participant.Learner x -> sprintf "%s: in=%i, out=%i, %s" x.Name x.Input.Count x.Output.Count (lState x.LState)
+
+  let participants ps =
+    System.String.Join ("\n", ps |> Seq.map participant)
+
 module Run =
   type Result =
     {
@@ -51,15 +100,26 @@ module Run =
   let wrapP (d,m) = (d,PMsg m)
   let wrapL (d,m) = (d,LMsg m)
   let wrapC (d,m) = (d,CMsg m)
+  
+  let consumeRequestIfReady debug participants (p:Participant.Proposer) =
+    let s = p.PState
+    let r = 
+      match s with
+      | PReady _ ->
+        let (s',outMsgO) = proposerReceiveFromClient s (p.InputRequests.Dequeue ())
+        do outMsgO |> Option.map wrapP |> Option.iter (sendMsg participants p.Name)
+           p.PState <- s'
+      | _ -> ()
+    do //if debug then printfn "--> %A " p.PState
+       r
 
-  let consumeRequest (p:Participant.Proposer) (MClientRequest cr) =
-    
+
 
   let consumeMsg debug quorumSize participants result (p:Participant.Participant) =
     match p with
     | Participant.Acceptor a ->
       let (sender, msg) = a.Input.Dequeue ()
-      let () = if debug then printfn "%s <- %A state: %A" a.Name msg a.AState
+      let () = if debug then printfn "%s <- (%s,%s)" a.Name sender (Format.msg msg)
       let r = 
         match msg with
         | PMsg pmsg -> let (s',outMsgO) = acceptorReceiveFromProposer a.AState pmsg sender
@@ -69,26 +129,23 @@ module Run =
                        do outMsgO |> Option.map wrapA |> Option.iter (sendMsg participants a.Name)
                           a.AState <- s'
         | _ -> failwithf "Acceptor received unexpected message %A" msg
-      do if debug then printfn "--> %A" a.AState
+      do //if debug then printfn "--> %A" a.AState
          r
     | Participant.Proposer p ->
       let (sender, msg) = p.Input.Dequeue ()
-      let () = if debug then printfn "%s <- %A state: %A" p.Name msg p.PState
+      let () = if debug then printfn "%s <- (%s,%s)" p.Name sender (Format.msg msg)
       let r = 
         match msg with
         | CMsg cmsg -> p.InputRequests.Enqueue cmsg
-//                       let (s',outMsgO) = proposerReceiveFromClient p.PState cmsg
-//                       do outMsgO |> Option.map wrapP |> Option.iter (sendMsg participants p.Name)
-//                          p.PState <- s'
         | AMsg amsg -> let (s',outMsgO) = proposerReceiveFromAcceptor quorumSize p.PState amsg
                        do outMsgO |> Option.map wrapP |> Option.iter (sendMsg participants p.Name)
                           p.PState <- s'
         | _ -> failwithf "Proposer received unexpected message %A" msg
-      do if debug then printfn "--> %A" p.PState
+      do //if debug then printfn "--> %A" p.PState
          r
     | Participant.Learner l ->
       let (sender, msg) = l.Input.Dequeue ()
-      let () = if debug then printfn "%s <- %A state: %A" l.Name msg l.LState
+      let () = if debug then printfn "%s <- (%s,%s)" l.Name sender (Format.msg msg)
       let r = 
         match msg with
         | AMsg amsg -> let (s', outMsgO) = learnerReceiveFromAcceptor l.LState amsg sender quorumSize
@@ -112,7 +169,13 @@ module Run =
       |> Seq.filter (Participant.isCrashed >> not)
       |> Seq.filter (fun p -> (Participant.input p).Count <> 0)
       |> Seq.toArray
-    in (canHandle,canSend)
+    let reqsWaiting =
+      ps
+      |> Seq.choose Participant.tryProposer
+      |> Seq.filter (fun p -> p.InputRequests.Count <> 0)
+      |> Seq.toArray
+
+    in (canHandle,canSend,reqsWaiting)
 
   let runToEnd (debug:bool) (random:System.Random) quorumSize participants result = 
     let pickRandom xs =
@@ -125,8 +188,10 @@ module Run =
     let mutable c = true
     while c
       do
-        let (canHandle,canSend) = unfinished
-        match random.Next 6 with
+        //printfn "-------------------------\n%A" participants
+        if debug then printfn "----------------------------\n%s" (Format.participants participants)
+        let (canHandle,canSend,reqsWaiting) = unfinished
+        match random.Next 7 with
         //consume message -- 1 message consumed can result in 4 messages sent (broadcast -- assuming cluster size 3)
         | 0 | 1 | 2 | 3 -> 
           if (Array.isEmpty canHandle)
@@ -140,19 +205,13 @@ module Run =
           else let participant = pickRandom canSend
                let name = Participant.name participant
                let outBuf = Participant.output participant
+               //printfn "-------------- send --------------\n%s" (Format.participants participants)
                send name (outBuf.Dequeue ())
         | 5 -> 
-          let proposersWithWaitingReqs = 
-            participants 
-            |> Seq.choose Participant.tryProposer 
-            |> Seq.filter (fun p -> p.InputRequests.Count <> 0)
-            |> Seq.toArray
-          if (proposersWithWaitingReqs.Length <> 0)
-          then let p = pickRandom proposersWithWaitingReqs
-               let r = p.InputRequests.Dequeue ()               
-               consumeRequest p r
+          if (reqsWaiting.Length <> 0)
+          then let p = pickRandom reqsWaiting
+               consumeRequestIfReady debug participants p
           else ()
-
           
         | _ (*2*) -> //maybe do something evil
           if (random.Next 20 <> 0)
@@ -161,18 +220,18 @@ module Run =
                let alive = all |> Seq.filter (fun a -> a.CrashedFor = 0) |> Seq.toArray
                if(Seq.length alive <= quorumSize) 
                then () //we cannot crash more according to assumptions
-               else let toCrash = pickRandom random alive
+               else let toCrash = pickRandom alive
                     let rounds = (random.Next 100) + 10 //at least 10 rounds
-                    printfn "XXX Crashing %s for %i rounds" toCrash.Name rounds
+                    if debug then printfn "XXX Crashing %s for %i rounds" toCrash.Name rounds
                     toCrash.Input.Clear()
                     toCrash.CrashedFor <- rounds
                     if (random.Next 2 = 0)
-                    then printfn "XXX Reset state of %s" toCrash.Name
-                         toCrash.AState <- Participant.freshAState
+                    then if debug then printfn "XXX Reset state of %s" toCrash.Name
+                         //toCrash.AState <- Participant.freshAState
         let () = participants |> Seq.iter Participant.decCrashedFor
         unfinished <- unfinishedParticipants participants
-        let (canHandle,canSend) = unfinished
-        c <- not (Array.isEmpty canHandle) || not (Array.isEmpty canSend)
+        let (canHandle,canSend,reqsWaiting) = unfinished
+        c <- not (Array.isEmpty canHandle) || not (Array.isEmpty canSend) || not (Array.isEmpty reqsWaiting)
   
   let drainQueue (buf:Queue<'a>) = 
     let mutable l = []

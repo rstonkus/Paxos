@@ -29,7 +29,7 @@ let readWithDefault d vvo =
 
 let increment vvo = 
   match vvo with
-  | None -> "0"
+  | None -> "1"
   | Some (_,v) -> let i = System.Int32.Parse v
                   in (i + 1).ToString()
 
@@ -74,7 +74,7 @@ let ``single round write and readwithDefault`` (seed:int) =
 
 [<Property(MaxTest = 100)>]
 let ``1000 increments by two clients`` (seed:int) = 
-  let debug = false
+  let debug = true
   let (quorumSize, participants) = clusterOf3 ()
   let random = System.Random(seed)
 
@@ -92,9 +92,10 @@ let ``1000 increments by two clients`` (seed:int) =
     let () = Run.clientSend client2 req2
     ()
   
+  let it = 20
   let bs = 
     seq {
-      for i in 1 .. 1000 -> 
+      for i in 1 .. it -> 
         twoIncs ()
     }
   let () = Seq.iter id bs
@@ -109,32 +110,39 @@ let ``1000 increments by two clients`` (seed:int) =
 
   //verify
   let vs = Run.Verify.responsesToGuid g result
+//  printfn "%A" participants
+//  printfn "%A" result
+  printf "."
+
 
   let v = Seq.head vs //there must be one anyway
   let allEq = Seq.forall ((=) v) vs
   
-  let always = v = "1999" && allEq
+  let always = v = (it.ToString ()) && allEq
   always
   
 
 
 [<EntryPoint>]
 let main argv = 
-  let rSeed = System.Random()
-  let seed = rSeed.Next ()
-  printfn "%i" seed
-  let r = System.Random(seed)
-  //let seed = 1204047459
-  
+  let b = ``1000 increments by two clients`` 2033103372
+  printf "%b" b
 
-  let bs = 
-    seq {
-      for i in 1 .. 10000 -> 
-        let seed' = r.Next ()
-        in ``single round write and readwithDefault`` seed'
-    }
-   
-  printfn "%A" (Seq.forall id bs)
+//  let rSeed = System.Random()
+//  //let seed = rSeed.Next ()
+//  let seed = 1234
+//  printfn "%i" seed
+//  let r = System.Random(seed)
+//  
+//  let bs = 
+//    seq {
+//      for i in 1 .. 1000 -> 
+//        let seed' = r.Next ()
+////        let () = printfn "%i" seed'
+//        in (seed',``1000 increments by two clients`` seed')
+//    }
+//  let s (i,b) = (sprintf "(%b,%i)" b i)
+//  printfn "%s" (System.String.Join (",\n", bs |> Seq.map s))
   0 // return an integer exit code
 
 

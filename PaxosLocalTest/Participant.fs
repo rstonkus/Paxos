@@ -146,9 +146,9 @@ module Participant =
   
   let decCrashedFor p = 
     match p with 
-    | Acceptor x -> x.CrashedFor <- x.CrashedFor - 1
-    | Proposer x -> x.CrashedFor <- x.CrashedFor - 1
-    | Learner x -> x.CrashedFor <- x.CrashedFor - 1
+    | Acceptor x -> if x.CrashedFor > 0 then x.CrashedFor <- x.CrashedFor - 1
+    | Proposer x -> if x.CrashedFor > 0 then x.CrashedFor <- x.CrashedFor - 1
+    | Learner x -> if x.CrashedFor > 0 then x.CrashedFor <- x.CrashedFor - 1
     | Client x -> ()
   
   let find d ps = ps |> Seq.filter (fun a -> name a = d) |> Seq.head
