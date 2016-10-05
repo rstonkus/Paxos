@@ -15,7 +15,7 @@ module Format =
     | PAcceptSent (n,cr,vvs) -> sprintf "PPrepareSent %i" n
 
   let aState (AReady (n,store):AState) =
-    sprintf "AReady %i, %A" n store
+    sprintf "AReady (%i, %A)" n store
 
   let lState (LReady store) =
     sprintf "%A" store
@@ -23,17 +23,17 @@ module Format =
   let pMsg (m:PMsg) = 
     match m with
     | MPrepare (n,k) -> sprintf "MPrepare (%i,%s)" n k
-    | MAccept (n,_,k,v) -> sprintf "MAccept (%i,%s,%s)" n k v 
+    | MAccept (n,_,k,v) -> sprintf "MAccept (%i,%s,%A)" n k v
 
   let aMsg (m:AMsg) =
     match m with
     | MPromise (n,vvo) -> sprintf "MPromise (%i,%A)" n vvo
-    | MAccepted (n,_,k,v) -> sprintf "MAccepted (%i,%s,%s)" n k v 
-    | MNackPrepare (n,n') -> sprintf "MNackPrepare (%i,%i)" n n' 
+    | MAccepted (n,_,k,v) -> sprintf "MAccepted (%i,%s,%A)" n k v
+    | MNackPrepare (n,n') -> sprintf "MNackPrepare (%i,%i)" n n'
 
   let lMsg (m:LMsg) =
     match m with
-    | MResponse (g,v) -> sprintf "MResponse (%s,%s)" (g.ToString ()) v
+    | MResponse (g,v) -> sprintf "MResponse (%s,%A)" (g.ToString ()) v
 
   let cMsg (m:CMsg) =
     match m with
@@ -45,6 +45,17 @@ module Format =
     | PMsg x -> pMsg x
     | LMsg x -> lMsg x
     | CMsg x -> cMsg x
+
+  let dest (d:Destination) =
+    sprintf "%A" d
+
+  let destMsg ((d,m):(Destination * Msg)) :string= 
+    sprintf "(%s,%s)" (dest d) (msg m)
+
+  let option f o =
+    match o with
+    | None -> "None"
+    | Some x -> sprintf "Some %s" (f x)
 
   let participant (p:Participant.Participant) =  
     let crashed c = (if c <> 0 then sprintf "XX%iXX " c else "")
@@ -101,17 +112,19 @@ module Run =
   let wrapL (d,m) = (d,LMsg m)
   let wrapC (d,m) = (d,CMsg m)
   
-  let consumeRequestIfReady debug participants (p:Participant.Proposer) =
+  let consumeRequestIfReady participants (p:Participant.Proposer) : bool =
     let s = p.PState
-    let r = 
-      match s with
-      | PReady _ ->
-        let (s',outMsgO) = proposerReceiveFromClient s (p.InputRequests.Dequeue ())
-        do outMsgO |> Option.map wrapP |> Option.iter (sendMsg participants p.Name)
-           p.PState <- s'
-      | _ -> ()
-    do //if debug then printfn "--> %A " p.PState
-       r
+    match s with
+    | PReady _ ->
+      let (s',outMsgO) = proposerReceiveFromClient s (p.InputRequests.Dequeue ())
+      let () = 
+        outMsgO 
+        |> Option.map wrapP 
+        |> Option.iter (sendMsg participants p.Name)
+      let () =p.PState <- s'
+      true
+    | _ -> 
+      false
 
 
 
@@ -119,40 +132,47 @@ module Run =
     match p with
     | Participant.Acceptor a ->
       let (sender, msg) = a.Input.Dequeue ()
-      let () = if debug then printfn "%s <- (%s,%s)" a.Name sender (Format.msg msg)
-      let r = 
-        match msg with
-        | PMsg pmsg -> let (s',outMsgO) = acceptorReceiveFromProposer a.AState pmsg sender
-                       do outMsgO |> Option.map wrapA |> Option.iter (sendMsg participants a.Name)
-                          a.AState <- s'
-        | AMsg amsg -> let (s',outMsgO) = acceptorReceiveFromAcceptor a.AState amsg sender
-                       do outMsgO |> Option.map wrapA |> Option.iter (sendMsg participants a.Name)
-                          a.AState <- s'
-        | _ -> failwithf "Acceptor received unexpected message %A" msg
-      do //if debug then printfn "--> %A" a.AState
-         r
+      let printDebug s' outDestMsgO = 
+        if debug 
+        then printfn "%s <- (%s,%s) --> %s out: %s" a.Name sender (Format.msg msg) (Format.aState s') (Format.option Format.destMsg outDestMsgO)
+        else ()
+      match msg with
+      | PMsg pmsg -> let (s',outMsgO) = acceptorReceiveFromProposer a.AState pmsg sender
+                     do let outDestMsgO = outMsgO |> Option.map wrapA
+                        printDebug s' outDestMsgO
+                        Option.iter a.Output.Enqueue outDestMsgO
+                        a.AState <- s'
+      | AMsg amsg -> let (s',outMsgO) = acceptorReceiveFromAcceptor a.AState amsg sender
+                     do let outDestMsgO = outMsgO |> Option.map wrapA
+                        printDebug s' outDestMsgO
+                        Option.iter a.Output.Enqueue outDestMsgO
+                        a.AState <- s'
+      | _ -> failwithf "Acceptor received unexpected message %A" msg
     | Participant.Proposer p ->
       let (sender, msg) = p.Input.Dequeue ()
-      let () = if debug then printfn "%s <- (%s,%s)" p.Name sender (Format.msg msg)
-      let r = 
-        match msg with
-        | CMsg cmsg -> p.InputRequests.Enqueue cmsg
-        | AMsg amsg -> let (s',outMsgO) = proposerReceiveFromAcceptor quorumSize p.PState amsg
-                       do outMsgO |> Option.map wrapP |> Option.iter (sendMsg participants p.Name)
-                          p.PState <- s'
-        | _ -> failwithf "Proposer received unexpected message %A" msg
-      do //if debug then printfn "--> %A" p.PState
-         r
+      let printDebug s' outDestMsgO = 
+        if debug 
+        then printfn "%s <- (%s,%s) --> %s out: %s" p.Name sender (Format.msg msg) (Format.pState s') (Format.option Format.destMsg outDestMsgO)
+
+      match msg with
+      | CMsg cmsg -> p.InputRequests.Enqueue cmsg
+      | AMsg amsg -> let (s',outMsgO) = proposerReceiveFromAcceptor quorumSize p.PState amsg
+                     do let outDestMsgO = outMsgO |> Option.map wrapP
+                        printDebug s' outDestMsgO
+                        Option.iter p.Output.Enqueue outDestMsgO
+                        p.PState <- s'
+      | _ -> failwithf "Proposer received unexpected message %A" msg
     | Participant.Learner l ->
       let (sender, msg) = l.Input.Dequeue ()
-      let () = if debug then printfn "%s <- (%s,%s)" l.Name sender (Format.msg msg)
       let r = 
         match msg with
         | AMsg amsg -> let (s', outMsgO) = learnerReceiveFromAcceptor l.LState amsg sender quorumSize
-                       do outMsgO |> Option.map wrapL |> Option.iter (sendMsg participants l.Name)
-                          l.LState <- s'
+                       let outDestMsgO = outMsgO |> Option.map wrapL
+                       if debug then printfn "%s <- (%s,%s) out: %s" l.Name sender (Format.msg msg) (Format.option Format.destMsg outDestMsgO)
+                       Option.iter l.Output.Enqueue outDestMsgO
+                       l.LState <- s'
         | _ -> failwithf "Learner received unexpected message %A" msg
-      do if debug then printfn "--> %A" l.LState
+      do //if debug then printfn "--> %A" l.LState
          r
     | Participant.Client c ->
       let (sender, msg) = c.Input.Dequeue ()
@@ -177,7 +197,7 @@ module Run =
 
     in (canHandle,canSend,reqsWaiting)
 
-  let runToEnd (debug:bool) (random:System.Random) quorumSize participants result = 
+  let runToEnd (debug:bool) (random:System.Random) emulateMessageLosses quorumSize participants result = 
     let pickRandom xs =
       let length = Array.length xs
       let i = random.Next length
@@ -186,44 +206,51 @@ module Run =
     let send = sendMsg participants
     let mutable unfinished = unfinishedParticipants participants //not counting client inputs
     let mutable c = true
+    let mutable step = 0
     while c
       do
         //printfn "-------------------------\n%A" participants
-        if debug then printfn "----------------------------\n%s" (Format.participants participants)
+        
         let (canHandle,canSend,reqsWaiting) = unfinished
-        match random.Next 7 with
-        //consume message -- 1 message consumed can result in 4 messages sent (broadcast -- assuming cluster size 3)
-        | 0 | 1 | 2 | 3 -> 
-          if (Array.isEmpty canHandle)
-          then ()
-          else let participant = pickRandom canHandle
-               consume participant 
-        //send message
-        | 4 -> 
-          if (Array.isEmpty canSend)
-          then ()
-          else let participant = pickRandom canSend
-               let name = Participant.name participant
-               let outBuf = Participant.output participant
-               //printfn "-------------- send --------------\n%s" (Format.participants participants)
-               send name (outBuf.Dequeue ())
-        | 5 -> 
-          if (reqsWaiting.Length <> 0)
-          then let p = pickRandom reqsWaiting
-               consumeRequestIfReady debug participants p
-          else ()
+        match random.Next 5 with
+        |0|1|2|3 -> //progress
+          if debug then printfn "-------------- %i --------------\n%s" step (Format.participants participants)
+          match random.Next 6 with
+          //consume message -- 1 message consumed can result in 4 messages sent (broadcast -- assuming cluster size 3)
+          | 0 | 1 | 2 -> 
+            if (Array.isEmpty canHandle)
+            then if debug then printfn "nop - nothing to handle" else ()
+            else let participant = pickRandom canHandle
+                 consume participant
+          //send message
+          | 3 | 4 -> 
+            if (Array.isEmpty canSend)
+            then if debug then printfn "nop - nothing to send" else ()
+            else let participant = pickRandom canSend
+                 let name = Participant.name participant
+                 let outBuf = Participant.output participant
+                 let (d,m) = (outBuf.Dequeue ())
+                 if debug then printfn "Send msg: %s, %s" (Participant.name participant) (Format.msg m)
+                 send name (d,m)
+          | _ -> 
+            if (reqsWaiting.Length <> 0)
+            then let p = pickRandom reqsWaiting
+                 if consumeRequestIfReady participants p
+                 then if debug then printfn "%s: client request" p.Name else ()
+                 else if debug then printfn "nop - proposer not ready to consume request" else ()
+            else if debug then printfn "nop - no requests waiting for proposer" else ()
           
-        | _ (*2*) -> //maybe do something evil
-          if (random.Next 20 <> 0)
+        | _ -> //maybe do something evil
+          if (random.Next 50 <> 0)
           then () // P(evil) = 1/5 * 1/20 = 1/100
           else let all =  Participant.allA participants
                let alive = all |> Seq.filter (fun a -> a.CrashedFor = 0) |> Seq.toArray
                if(Seq.length alive <= quorumSize) 
-               then () //we cannot crash more according to assumptions
+               then if debug then printfn "nop - too many crashed" else () //we cannot crash more according to assumptions
                else let toCrash = pickRandom alive
                     let rounds = (random.Next 100) + 10 //at least 10 rounds
                     if debug then printfn "XXX Crashing %s for %i rounds" toCrash.Name rounds
-                    toCrash.Input.Clear()
+                    if emulateMessageLosses then toCrash.Input.Clear()
                     toCrash.CrashedFor <- rounds
                     if (random.Next 2 = 0)
                     then if debug then printfn "XXX Reset state of %s" toCrash.Name
@@ -232,6 +259,7 @@ module Run =
         unfinished <- unfinishedParticipants participants
         let (canHandle,canSend,reqsWaiting) = unfinished
         c <- not (Array.isEmpty canHandle) || not (Array.isEmpty canSend) || not (Array.isEmpty reqsWaiting)
+        step <- step + 1
   
   let drainQueue (buf:Queue<'a>) = 
     let mutable l = []

@@ -74,21 +74,23 @@ module BasicPaxos =
 // replication to acceptor when starting up
   
   type N = int
-  type Value = string
-  type Key = string
-
   type Sender = string
-
+  type Key = string
+  type Value = string
+  type ValueLastTouched = Value * (Sender * Guid) list //"sender*guid list" makes it possible to check for execution of a concrete operation
+  
   type Destination =
     | Proposer of Sender
     | Broadcast
     | BroadcastAcceptors
     | Client of Sender
   
-  type VersionedValue = N * Value
+  //type VersionedValue = N * Value
+  type VersionedValueLastTouched = N * ValueLastTouched 
   type ClientSession = Guid * Sender
-  type ClientRequest = ClientSession * Key * (VersionedValue option -> Value)
-  type AcceptorStore = Map<Key,VersionedValue>
+  type ClientOperation = ValueLastTouched option -> ValueLastTouched
+  type ClientRequest = ClientSession * Key * ClientOperation
+  type AcceptorStore = Map<Key,VersionedValueLastTouched>
   
   //TODO we must remember the old value when building up quorum for the new
   type LearnerStore = Map<Key, N * Sender list> //Sender is necessary in order to make sure that it is not a duplicate
@@ -98,22 +100,23 @@ module BasicPaxos =
   //client msgs
   type CMsg = 
     | MClientRequest of ClientRequest
+    | MForceRetry of ClientRequest
 
   //learner msgs
   type LMsg = 
-    | MResponse of Guid * Value
+    | MResponse of Guid * ValueLastTouched
 
   //proposer msgs
   type PMsg =
     | MPrepare of N * Key
-    | MAccept of N * ClientSession * Key * Value //new value
+    | MAccept of N * ClientSession * Key * ValueLastTouched //new value
 
   //acceptors msgs
   type AMsg = 
     //Sent in response to a Prepare to only the requesting proposer
-    | MPromise of N * VersionedValue option //session n, versioned value stored on that particular node
+    | MPromise of N * VersionedValueLastTouched option //session n, versioned value stored on that particular node
     //Broadcast to all proposers and learners in case of success
-    | MAccepted of N * ClientSession * Key * Value //this session, (value session (=this session), value)
+    | MAccepted of N * ClientSession * Key * ValueLastTouched //this session, (value session (=this session), value)
     //Sent in response to a Prepare to only the requesting proposer
     //in case the acceptor is ahead of the proposed session n.
     | MNackPrepare of N * N//session n, head n at acceptor (It will not accept smaller ns)
@@ -129,9 +132,12 @@ module BasicPaxos =
     //No session in progress. N = Last tried session that we know
     | PReady of N 
     //State of collecting promises in order to reach quorum
-    | PPrepareSent of N * ClientRequest * (VersionedValue option) list // I sent proposal with n,v, received promise list so far
+    | PPrepareSent of N * ClientRequest * (VersionedValueLastTouched option) list // I sent proposal with n,v, received promise list so far
     //State of collecting accepted messages 
-    | PAcceptSent of N * ClientRequest * VersionedValue list// I sent accept with n,v, received accept list so far
+    //this is a potential stuck state, since we are not guaranteed to receive MAccepted from quorum 
+    // => We need to implement some sort of detection in the client.
+    //    in case another proposer initiates a session, we will however have progress.
+    | PAcceptSent of N * ClientRequest * VersionedValueLastTouched list// I sent accept with n,v, received accept list so far
 
   type AState =
     | AReady of N * AcceptorStore//previous highest proposed
@@ -139,13 +145,16 @@ module BasicPaxos =
   type LState =
     | LReady of LearnerStore
 
+  type CState =
+    | CReady
+    | CActiveRequest of Guid * Key * ClientOperation
 
 
   //helpers
   let isQuorum quorumSize xs = quorumSize <= Seq.length xs
 
-  let latestValue (vs:(VersionedValue option) list) : VersionedValue option = 
-    List.maxBy (fun v -> match v with None -> -1 | Some (n,_) -> n) vs
+  let latestValue (vs:(VersionedValueLastTouched option) list) : ValueLastTouched option = 
+    (List.maxBy (fun v -> match v with None -> -1 | Some (n,_) -> n) vs) |> Option.map snd
 
   //msg handlers
   let proposerReceiveFromAcceptor (quorumSize:int) (s:PState) (m:AMsg) : (PState * (Destination * PMsg) option) =
@@ -160,7 +169,11 @@ module BasicPaxos =
         if (n' > n)
         then (PReady n', None) //update session
         else ignore
-      | _ -> ignore //ignore all other msgs
+      | MNackPrepare (_,n') ->
+        if (n' > n)
+        then (PReady n',None)
+        else ignore
+      | MPromise _ -> ignore
     | PPrepareSent (n, cr, promises) ->
       match m with
       | MPromise (n', v') -> 
@@ -170,6 +183,7 @@ module BasicPaxos =
              if (isQuorum quorumSize promises')
              then let maxV = promises' |> latestValue
                   let v' = f maxV
+                  //in (PReady n, Some (BroadcastAcceptors, MAccept(n,cs,k,v')))
                   in (PAcceptSent(n, cr, []), Some (BroadcastAcceptors, MAccept(n,cs,k,v'))) //send accept
              else (PPrepareSent(n, cr, promises'), None) //wait for more promises
         else ignore //it can only be an old one, since it is a response to a request sent by us. Ignore
@@ -178,6 +192,7 @@ module BasicPaxos =
         if (n = n')
         then retry cr (newN+1)
         else ignore
+    
     | PAcceptSent (n, cr, accepts) ->
       match m with
       | MPromise _ -> ignore //either from another session, or a promise that was not needed for this one. Ignore
