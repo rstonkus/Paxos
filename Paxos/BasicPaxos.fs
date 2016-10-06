@@ -14,7 +14,6 @@ module BasicPaxos =
 //A Proposer (the leader) creates a proposal identified with a number N. This number must be greater than any previous proposal 
 //number used by this Proposer. Then, it sends a Prepare message containing this proposal to a Quorum of Acceptors. The Proposer 
 //decides who is in the Quorum.
-
 //Phase 1b: Promise[edit]
 //If the proposal's number N is higher than any previous proposal number received from any Proposer by the Acceptor, then the 
 //Acceptor must return a promise to ignore all future proposals having a number less than N. If the Acceptor accepted a proposal 
@@ -22,14 +21,12 @@ module BasicPaxos =
 //Otherwise, the Acceptor can ignore the received proposal. It does not have to answer in this case for Paxos to work. However, 
 //for the sake of optimization, sending a denial (Nack) response would tell the Proposer that it can stop its attempt to create 
 //consensus with proposal N.
-
 //Phase 2a: Accept Request[edit]
 //If a Proposer receives enough promises from a Quorum of Acceptors, it needs to set a value to its proposal. If any Acceptors had 
 //previously accepted any proposal, then they'll have sent their values to the Proposer, who now must set the value of its 
 //proposal to the value associated with the highest proposal number reported by the Acceptors. If none of the Acceptors had 
 //accepted a proposal up to this point, then the Proposer may choose any value for its proposal.[17]
 //The Proposer sends an Accept Request message to a Quorum of Acceptors with the chosen value for its proposal.
-
 //Phase 2b: Accepted[edit]
 //If an Acceptor receives an Accept Request message for a proposal N, it must accept it if and only if it has not already promised 
 //to any prepare proposals having an identifier greater than N. In this case, it should register the corresponding value v and send 
@@ -66,11 +63,7 @@ module BasicPaxos =
 //     |         |<---------X--X--X------>|->|  Accepted(N,I+1,W)
 //     |<---------------------------------X--X  Response
 //     |         |          |  |  |       |  |
-
 //TODO 
-// retry in proposer
-// handle at least once delivery (or argue that we dont need it)
-// timeout
 // replication to acceptor when starting up
   
   type N = int

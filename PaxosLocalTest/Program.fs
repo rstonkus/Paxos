@@ -111,9 +111,7 @@ let ``1000 increments by two clients`` (seed:int) =
         twoIncs ()
     }
   let () = Seq.iter id bs
-
   let () = Run.runToEnd debug random false quorumSize participants result
-
   let g = System.Guid.NewGuid()
   let r = (Proposer "proposer1", CMsg (MClientRequest ((g,"client1"),"key1", atMostOnce (readWithDefault "default") "client1" g)))
   let () = Run.clientSend client1 r
