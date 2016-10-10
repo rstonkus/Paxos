@@ -14,6 +14,11 @@ module Format =
     | PPrepareSent (n,cr,vvos) -> sprintf "PPrepareSent %i" n
     | PAcceptSent (n,cr,vvs) -> sprintf "PPrepareSent %i" n
 
+  let cState (s:CState) =
+    match s with
+    | CInitial -> "CInitial"
+    | CActiveRequest (q,t,er) -> sprintf "CActiveRequest q=%i, t=%i" q.Count t
+
   let aState (AReady (n,store):AState) =
     sprintf "AReady (%i, %A)" n store
 
@@ -23,28 +28,28 @@ module Format =
   let pMsg (m:PMsg) = 
     match m with
     | MPrepare (n,k) -> sprintf "MPrepare (%i,%s)" n k
-    | MAccept (n,_,k,v) -> sprintf "MAccept (%i,%s,%A)" n k v
+    | MAccept (n,sender,(g,k),v) -> sprintf "MAccept (%i,%s,%A)" n k v
 
   let aMsg (m:AMsg) =
     match m with
     | MPromise (n,vvo) -> sprintf "MPromise (%i,%A)" n vvo
-    | MAccepted (n,_,k,v) -> sprintf "MAccepted (%i,%s,%A)" n k v
+    | MAccepted (n,sender,(g,k),v) -> sprintf "MAccepted (%i,%s,%A)" n k v
     | MNackPrepare (n,n') -> sprintf "MNackPrepare (%i,%i)" n n'
 
   let lMsg (m:LMsg) =
     match m with
     | MResponse (g,v) -> sprintf "MResponse (%s,%A)" (g.ToString ()) v
 
-  let cMsg (m:CMsg) =
+  let eMsg (m:EMsg) =
     match m with
-    | MClientRequest ((g,s),k,f) -> sprintf "MClientRequest (%s,%s,%s)" (g.ToString()) s k
+    | MExternalRequest (sender, ((g,k),f)) -> sprintf "MClientRequest (%s,%s)" (g.ToString()) k
 
   let msg (m:Msg) =
     match m with
     | AMsg x -> aMsg x
     | PMsg x -> pMsg x
     | LMsg x -> lMsg x
-    | CMsg x -> cMsg x
+    | EMsg x -> eMsg x
 
   let dest (d:Destination) =
     sprintf "%A" d
@@ -60,10 +65,10 @@ module Format =
   let participant (p:Participant.Participant) =  
     let crashed c = (if c <> 0 then sprintf "XX%iXX " c else "")
     match p with
-    | Participant.Proposer x -> sprintf "%s: inreq=%i, in=%i, out=%i, %s" x.Name x.InputRequests.Count x.Input.Count x.Output.Count (pState x.PState)
+    | Participant.Proposer x -> sprintf "%s: in=%i, out=%i, %s %s" x.Name x.Input.Count x.Output.Count (cState x.CState) (pState x.PState)
     | Participant.Acceptor x -> sprintf "%s: %sin=%i, out=%i, %s" x.Name (crashed x.CrashedFor) x.Input.Count x.Output.Count (aState x.AState)
-    | Participant.Client x -> sprintf "%s: in=%i, out=%i" x.Name x.Input.Count x.Output.Count
     | Participant.Learner x -> sprintf "%s: in=%i, out=%i, %s" x.Name x.Input.Count x.Output.Count (lState x.LState)
+    | Participant.External x -> sprintf "%s: in=%i, out=%i" x.Name x.Input.Count x.Output.Count
 
   let participants ps =
     System.String.Join ("\n", ps |> Seq.map participant)
@@ -89,8 +94,8 @@ module Run =
       result.Responses |> Seq.filter (fun (n,_,_) -> n = name)
 
 
-  let clientSend (client:Participant.Client) m =
-    client.Output.Enqueue m
+  let externalReceive (entry:Participant.External) m =
+    entry.Output.Enqueue m
 
   //puts the msg in the right input queue
   let sendMsg participants sender m = 
@@ -98,37 +103,22 @@ module Run =
     let broadcast msg = Participant.broadcast participants (sender,msg)
     let broadcastA msg = Participant.broadcastA participants (sender,msg)
     match m with
-    | (Proposer d, (CMsg (MClientRequest _) as msg)) -> send msg d
+    | (Proposer d, (EMsg (MExternalRequest _) as msg)) -> send msg d
     | (BroadcastAcceptors, (PMsg (MPrepare _) as msg)) -> broadcastA msg
     | (Proposer d, (AMsg (MPromise _) as msg)) -> send msg d
     | (BroadcastAcceptors, (PMsg (MAccept _) as msg)) -> broadcastA msg
     | (Proposer d, (AMsg (MNackPrepare _) as msg)) -> send msg d
     | (Broadcast, (AMsg (MAccepted _) as msg)) -> broadcast msg
-    | (Client d, (LMsg (MResponse _) as msg)) -> send msg d
+    | (External d, (LMsg (MResponse _) as msg)) -> send msg d
     | _ -> failwithf "bad message destination %A" m
   
   let wrapA (d,m) = (d,AMsg m)
   let wrapP (d,m) = (d,PMsg m)
   let wrapL (d,m) = (d,LMsg m)
-  let wrapC (d,m) = (d,CMsg m)
+  let wrapE (d,m) = (d,EMsg m)
   
-  let consumeRequestIfReady participants (p:Participant.Proposer) : bool =
-    let s = p.PState
-    match s with
-    | PReady _ ->
-      let (s',outMsgO) = proposerReceiveFromClient s (p.InputRequests.Dequeue ())
-      let () = 
-        outMsgO 
-        |> Option.map wrapP 
-        |> Option.iter (sendMsg participants p.Name)
-      let () =p.PState <- s'
-      true
-    | _ -> 
-      false
 
-
-
-  let consumeMsg debug quorumSize participants result (p:Participant.Participant) =
+  let consumeMsg debug quorumSize participants result time (p:Participant.Participant) =
     match p with
     | Participant.Acceptor a ->
       let (sender, msg) = a.Input.Dequeue ()
@@ -150,15 +140,19 @@ module Run =
       | _ -> failwithf "Acceptor received unexpected message %A" msg
     | Participant.Proposer p ->
       let (sender, msg) = p.Input.Dequeue ()
-      let printDebug s' outDestMsgO = 
+      let printDebug c' s' outDestMsgO = 
         if debug 
-        then printfn "%s <- (%s,%s) --> %s out: %s" p.Name sender (Format.msg msg) (Format.pState s') (Format.option Format.destMsg outDestMsgO)
-
+        then printfn "%s <- (%s,%s) --> (%s,%s) out: %s" p.Name sender (Format.msg msg) (Format.cState c') (Format.pState s') (Format.option Format.destMsg outDestMsgO)
       match msg with
-      | CMsg cmsg -> p.InputRequests.Enqueue cmsg
+      | EMsg emsg -> let (cs',ps',outMsgO) = proposerReceiveRequest p.CState p.PState time emsg
+                     do let outDestMsgO = outMsgO |> Option.map wrapP
+                        printDebug cs' ps' outDestMsgO
+                        Option.iter p.Output.Enqueue outDestMsgO
+                        p.PState <- ps'
+                        p.CState <- cs'
       | AMsg amsg -> let (s',outMsgO) = proposerReceiveFromAcceptor quorumSize p.PState amsg
                      do let outDestMsgO = outMsgO |> Option.map wrapP
-                        printDebug s' outDestMsgO
+                        printDebug p.CState s' outDestMsgO
                         Option.iter p.Output.Enqueue outDestMsgO
                         p.PState <- s'
       | _ -> failwithf "Proposer received unexpected message %A" msg
@@ -174,7 +168,7 @@ module Run =
         | _ -> failwithf "Learner received unexpected message %A" msg
       do //if debug then printfn "--> %A" l.LState
          r
-    | Participant.Client c ->
+    | Participant.External c ->
       let (sender, msg) = c.Input.Dequeue ()
       result.Responses <- (c.Name, sender, msg) :: result.Responses
 
@@ -189,13 +183,8 @@ module Run =
       |> Seq.filter (Participant.isCrashed >> not)
       |> Seq.filter (fun p -> (Participant.input p).Count <> 0)
       |> Seq.toArray
-    let reqsWaiting =
-      ps
-      |> Seq.choose Participant.tryProposer
-      |> Seq.filter (fun p -> p.InputRequests.Count <> 0)
-      |> Seq.toArray
 
-    in (canHandle,canSend,reqsWaiting)
+    in (canHandle,canSend)
 
   let runToEnd (debug:bool) (random:System.Random) emulateMessageLosses quorumSize participants result = 
     let pickRandom xs =
@@ -206,22 +195,22 @@ module Run =
     let send = sendMsg participants
     let mutable unfinished = unfinishedParticipants participants //not counting client inputs
     let mutable c = true
-    let mutable step = 0
+    let mutable time = 0
     while c
       do
         //printfn "-------------------------\n%A" participants
         
-        let (canHandle,canSend,reqsWaiting) = unfinished
+        let (canHandle,canSend) = unfinished
         match random.Next 5 with
         |0|1|2|3 -> //progress
-          if debug then printfn "-------------- %i --------------\n%s" step (Format.participants participants)
+          if debug then printfn "-------------- %i --------------\n%s" time (Format.participants participants)
           match random.Next 6 with
           //consume message -- 1 message consumed can result in 4 messages sent (broadcast -- assuming cluster size 3)
           | 0 | 1 | 2 -> 
             if (Array.isEmpty canHandle)
             then if debug then printfn "nop - nothing to handle" else ()
             else let participant = pickRandom canHandle
-                 consume participant
+                 consume time participant
           //send message
           | 3 | 4 -> 
             if (Array.isEmpty canSend)
@@ -232,13 +221,13 @@ module Run =
                  let (d,m) = (outBuf.Dequeue ())
                  if debug then printfn "Send msg: %s, %s" (Participant.name participant) (Format.msg m)
                  send name (d,m)
-          | _ -> 
-            if (reqsWaiting.Length <> 0)
-            then let p = pickRandom reqsWaiting
-                 if consumeRequestIfReady participants p
-                 then if debug then printfn "%s: client request" p.Name else ()
-                 else if debug then printfn "nop - proposer not ready to consume request" else ()
-            else if debug then printfn "nop - no requests waiting for proposer" else ()
+          | _ -> ()
+//            if (reqsWaiting.Length <> 0)
+//            then let p = pickRandom reqsWaiting
+//                 if consumeRequestIfReady participants p
+//                 then if debug then printfn "%s: client request" p.Name else ()
+//                 else if debug then printfn "nop - proposer not ready to consume request" else ()
+//            else if debug then printfn "nop - no requests waiting for proposer" else ()
           
         | _ -> //maybe do something evil
           if (random.Next 50 <> 0)
@@ -257,9 +246,9 @@ module Run =
                          //toCrash.AState <- Participant.freshAState
         let () = participants |> Seq.iter Participant.decCrashedFor
         unfinished <- unfinishedParticipants participants
-        let (canHandle,canSend,reqsWaiting) = unfinished
-        c <- not (Array.isEmpty canHandle) || not (Array.isEmpty canSend) || not (Array.isEmpty reqsWaiting)
-        step <- step + 1
+        let (canHandle,canSend) = unfinished
+        c <- not (Array.isEmpty canHandle) || not (Array.isEmpty canSend)
+        time <- time + 1
   
   let drainQueue (buf:Queue<'a>) = 
     let mutable l = []

@@ -1,6 +1,7 @@
 ﻿namespace Paxos
 
 open System
+open System.Collections.Generic
 
 module BasicPaxos =
 
@@ -66,6 +67,7 @@ module BasicPaxos =
 //TODO 
 // replication to acceptor when starting up
   
+  type Time = int
   type N = int
   type Sender = string
   type Key = string
@@ -76,24 +78,21 @@ module BasicPaxos =
     | Proposer of Sender
     | Broadcast
     | BroadcastAcceptors
-    | Client of Sender
+    | External of Sender
   
-  //type VersionedValue = N * Value
+
   type VersionedValueLastTouched = N * ValueLastTouched 
-  type ClientSession = Guid * Sender
-  type ClientOperation = ValueLastTouched option -> ValueLastTouched
-  type ClientRequest = ClientSession * Key * ClientOperation
   type AcceptorStore = Map<Key,VersionedValueLastTouched>
   
   //TODO we must remember the old value when building up quorum for the new
   type LearnerStore = Map<Key, N * Sender list> //Sender is necessary in order to make sure that it is not a duplicate
-  
 
-  //Messages are split into different types depending on who sends them
-  //client msgs
-  type CMsg = 
-    | MClientRequest of ClientRequest
-    | MForceRetry of ClientRequest
+  //Request
+  type Operation = ValueLastTouched option -> ValueLastTouched
+  type RequestSession = Guid * Key
+  type Request = Sender * RequestSession * Operation
+  type ExternalRequest = RequestSession * Operation
+ 
 
   //learner msgs
   type LMsg = 
@@ -102,18 +101,20 @@ module BasicPaxos =
   //proposer msgs
   type PMsg =
     | MPrepare of N * Key
-    | MAccept of N * ClientSession * Key * ValueLastTouched //new value
+    | MAccept of N * Sender * RequestSession * ValueLastTouched //new value
 
   //acceptors msgs
   type AMsg = 
     //Sent in response to a Prepare to only the requesting proposer
     | MPromise of N * VersionedValueLastTouched option //session n, versioned value stored on that particular node
     //Broadcast to all proposers and learners in case of success
-    | MAccepted of N * ClientSession * Key * ValueLastTouched //this session, (value session (=this session), value)
+    | MAccepted of N * Sender * RequestSession * ValueLastTouched //this session, (value session (=this session), value)
     //Sent in response to a Prepare to only the requesting proposer
     //in case the acceptor is ahead of the proposed session n.
     | MNackPrepare of N * N//session n, head n at acceptor (It will not accept smaller ns)
 
+  type EMsg =
+    | MExternalRequest of Sender * ExternalRequest
 
 
   //For now the session state is shared by all keys. This is suboptimal if one wants more than one value in the system.
@@ -121,16 +122,20 @@ module BasicPaxos =
   //Essentially: type PState = Map<Key,PStateOld>
   //                  AState = Map<Key,AStateOld>
 
+  type CState =
+    | CInitial
+    | CActiveRequest of Queue<ExternalRequest> * Time * ExternalRequest
+
   type PState =
     //No session in progress. N = Last tried session that we know
     | PReady of N 
     //State of collecting promises in order to reach quorum
-    | PPrepareSent of N * ClientRequest * (VersionedValueLastTouched option) list // I sent proposal with n,v, received promise list so far
+    | PPrepareSent of N * Request * (VersionedValueLastTouched option) list // I sent proposal with n,v, received promise list so far
     //State of collecting accepted messages 
     //this is a potential stuck state, since we are not guaranteed to receive MAccepted from quorum 
     // => We need to implement some sort of detection in the client.
     //    in case another proposer initiates a session, we will however have progress.
-    | PAcceptSent of N * ClientRequest * VersionedValueLastTouched list// I sent accept with n,v, received accept list so far
+    | PAcceptSent of N * Request * VersionedValueLastTouched list// I sent accept with n,v, received accept list so far
 
   type AState =
     | AReady of N * AcceptorStore//previous highest proposed
@@ -138,13 +143,16 @@ module BasicPaxos =
   type LState =
     | LReady of LearnerStore
 
-  type CState =
-    | CReady
-    | CActiveRequest of Guid * Key * ClientOperation
+
 
 
   //helpers
   let isQuorum quorumSize xs = quorumSize <= Seq.length xs
+  
+//  let hasTimedOut time =
+//    let now = DateTime.Now
+//    now - time > (TimeSpan.FromSeconds 2.0)
+    
 
   let latestValue (vs:(VersionedValueLastTouched option) list) : ValueLastTouched option = 
     (List.maxBy (fun v -> match v with None -> -1 | Some (n,_) -> n) vs) |> Option.map snd
@@ -152,9 +160,10 @@ module BasicPaxos =
   //msg handlers
   let proposerReceiveFromAcceptor (quorumSize:int) (s:PState) (m:AMsg) : (PState * (Destination * PMsg) option) =
     let ignore = (s,None)
-    let retry cr n =
-      let (_,k,_) = cr
-      in (PPrepareSent (n,cr,[]), Some (BroadcastAcceptors, MPrepare (n,k)))
+    let retry (r:Request) n =
+      let (sender,session,f) = r
+      let (g,k) = session
+      in (PPrepareSent (n,r,[]), Some (BroadcastAcceptors, MPrepare (n,k)))
     match s with
     | PReady n -> //This session is initiated by another proposer
       match m with
@@ -167,29 +176,29 @@ module BasicPaxos =
         then (PReady n',None)
         else ignore
       | MPromise _ -> ignore
-    | PPrepareSent (n, cr, promises) ->
+    | PPrepareSent (n, r, promises) ->
       match m with
       | MPromise (n', v') -> 
         if (n = n') //it is a promise in this session initiated by me
         then let promises' = v' :: promises
-             let (cs,k,f) = cr
+             let (sender,session,f) = r
              if (isQuorum quorumSize promises')
              then let maxV = promises' |> latestValue
                   let v' = f maxV
                   //in (PReady n, Some (BroadcastAcceptors, MAccept(n,cs,k,v')))
-                  in (PAcceptSent(n, cr, []), Some (BroadcastAcceptors, MAccept(n,cs,k,v'))) //send accept
-             else (PPrepareSent(n, cr, promises'), None) //wait for more promises
+                  in (PAcceptSent(n, r, []), Some (BroadcastAcceptors, MAccept (n,sender,session,v'))) //send accept
+             else (PPrepareSent(n, r, promises'), None) //wait for more promises
         else ignore //it can only be an old one, since it is a response to a request sent by us. Ignore
       | MAccepted _ -> ignore //Old => Ignore
       | MNackPrepare (n',newN) -> 
         if (n = n')
-        then retry cr (newN+1)
+        then retry r (newN+1)
         else ignore
     
     | PAcceptSent (n, cr, accepts) ->
       match m with
       | MPromise _ -> ignore //either from another session, or a promise that was not needed for this one. Ignore
-      | MAccepted (n', _, _, v) ->
+      | MAccepted (n', sender, session, v) ->
         if (n = n') //it is an accept in this session initiated by me
         then let accepts' = (n,v) :: accepts
              if (isQuorum quorumSize accepts')
@@ -201,18 +210,44 @@ module BasicPaxos =
       | MNackPrepare _ -> ignore //it could have only come from an old session
 
 
-  //note that the client is modelled as running locally on the proposer 
-  let proposerReceiveFromClient (s:PState) (MClientRequest cr:CMsg) : (PState * (Destination * PMsg) Option) =
-    match s with 
-    | PReady n ->
+  //note that the client is modelled as running locally with the proposer 
+  let clientCheckActiveRequest (sender:Sender) (cs:CState) (ps:PState) (now:Time) (hastimedout:Time -> bool) : (CState * PState * (Destination * PMsg) option) =
+    let ignore = (cs,ps,None)
+    let restart q n (er:ExternalRequest) = 
       let n' = n+1
-      let (_,k,_) = cr
-      in (PPrepareSent (n',cr,[]), Some (BroadcastAcceptors, MPrepare (n',k)))
-    //These are not meant to happen. Since the client is local, requests should be buffered and 
-    //only sent, when proposer is PReady.
-    | PPrepareSent _ -> failwith "busy"
-    | PAcceptSent _ -> failwith "busy"
-    
+      let (session,f) = er
+      let (g,k) = session
+      let r = (sender,session,f)
+      (CActiveRequest (q,now,er), PPrepareSent (n',r,[]), Some (BroadcastAcceptors, MPrepare (n',k)))
+    match cs with
+    | CInitial -> ignore
+    | CActiveRequest (q,time,er) ->
+      if hastimedout time
+      then match ps with
+           | PReady _ -> failwith "Bug. A ready state should always start the next round immediately in case any is ready"
+           | PPrepareSent (n,_,_) -> restart q n er
+           | PAcceptSent (n,_,_) -> restart q n er
+      else ignore 
+
+
+  let proposerReceiveRequest (cs:CState) (ps:PState) (now:Time) (MExternalRequest(sender,er):EMsg) : (CState * PState * (Destination * PMsg) option) =
+    let handleRequest q n (er:ExternalRequest) = 
+      let n' = n+1
+      let (session,f) = er
+      let (g,k) = session
+      let r = (sender,session,f)
+      in (CActiveRequest (q,now,er), PPrepareSent (n',r,[]), Some (BroadcastAcceptors, MPrepare (n',k)))
+    match cs with
+    | CInitial ->
+      match ps with
+      | PReady n -> 
+        let q = Queue<ExternalRequest>()
+        in handleRequest q n er
+      | _ -> failwith "Bug. When client is in CInitial, proposer cannot have an active session."
+    | CActiveRequest (q,_,_) ->
+      let () = q.Enqueue er
+      in (cs,ps,None)
+
 
   let acceptorReceiveFromProposer (AReady (n,store):AState) (m:PMsg) (sender:Sender) : (AState * (Destination * AMsg) option) =
     match m with
@@ -220,10 +255,11 @@ module BasicPaxos =
       if (n < n')
       then (AReady (n', store), Some (Proposer sender, MPromise (n', Map.tryFind k store)))
       else (AReady (n', store), Some (Proposer sender, MNackPrepare (n',n)))
-    | MAccept (n',cs, k',v') ->
+    | MAccept (n', sender, session, v') ->
+      let (_, k') = session
       if (n <= n') 
       then let store' = Map.add k' (n',v') store
-           in (AReady (n', store'), Some (Broadcast, MAccepted (n', cs, k', v')))
+           in (AReady (n', store'), Some (Broadcast, MAccepted (n', sender, session, v')))
       else (AReady (n, store), Some (Proposer sender, MNackPrepare (n',n)))
 
   let acceptorReceiveFromAcceptor (AReady (n,store):AState) (m:AMsg) (sender:Sender) : (AState * (Destination * AMsg) option) =
@@ -236,7 +272,9 @@ module BasicPaxos =
       let store' = Map.add k (n, [sender]) store //update store to reflect one vote
       in (LReady store', None) //never quorum with just one
     match m with
-    | MAccepted (n, (guid,clientSender), k, v) -> 
+    //| MAccepted (n, (guid,clientSender), k, v) -> 
+    | MAccepted (n, clientSender, session, v) -> 
+      let (guid,k) = session
       let storeV = Map.tryFind k store
       match storeV with
       | None -> firstVote k n
@@ -245,7 +283,7 @@ module BasicPaxos =
         then let votes' = sender :: votes //collect vote first
              let store' = Map.add k (nStore,votes') store //update store
              in if ((not (isQuorum quorumSize votes)) && (isQuorum quorumSize votes')) //if we got to quorum this time
-                then (LReady store', Some (Client clientSender, MResponse (guid,v)))
+                then (LReady store', Some (External clientSender, MResponse (guid,v)))
                 else (LReady store', None)
         else if (n > nStore)
              then firstVote k n //new vote round

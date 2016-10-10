@@ -8,7 +8,7 @@ type Msg =
   | AMsg of AMsg
   | PMsg of PMsg
   | LMsg of LMsg
-  | CMsg of CMsg
+  | EMsg of EMsg
 
 module Participant =
   type Acceptor = 
@@ -24,9 +24,9 @@ module Participant =
       Name : string
       Output : Queue<Destination * Msg>
       Input : Queue<string * Msg>
-      InputRequests : Queue<CMsg>
       mutable PState : PState
-      mutable CrashedFor : int
+      mutable CState : CState
+      //mutable CrashedFor : int
     }
   type Learner = 
     { 
@@ -34,40 +34,42 @@ module Participant =
       Output : Queue<Destination * Msg>
       Input : Queue<string * Msg>
       mutable LState : LState
-      mutable CrashedFor : int
+      //mutable CrashedFor : int
     }
-  type Client = 
-    { 
+  type External =
+   {
       Name : string
       Output : Queue<Destination * Msg>
       Input : Queue<string * Msg>
-    }
+   }
+  
 
   
   type Type = 
   | AcceptorT
   | ProposerT
   | LearnerT
-  | ClientT
+  | ExternalT
 
   type Participant = 
     | Acceptor of Acceptor
     | Proposer of Proposer
     | Learner of Learner
-    | Client of Client
+    | External of External
 
   let freshAState = AReady (0,Map.empty)
   let freshPState = PReady 0
   let freshLState = LReady Map.empty
+  let freshCState = CInitial
 
   let proposer name = 
     Proposer { 
       Name = name
       Output = Queue<Destination*Msg>()
       Input = Queue<string * Msg>()
-      InputRequests = Queue<CMsg>()
-      CrashedFor = 0
+//      CrashedFor = 0
       PState = freshPState
+      CState = freshCState
     }
   let acceptor name = 
     Acceptor { 
@@ -82,11 +84,11 @@ module Participant =
       Name = name
       Output = Queue<Destination*Msg>()
       Input = Queue<string * Msg>()
-      CrashedFor = 0 
+//      CrashedFor = 0 
       LState = freshLState
     }
-  let client name = 
-    Client { 
+  let external name = 
+    External { 
       Name = name
       Output = Queue<Destination*Msg>()
       Input = Queue<string * Msg>()
@@ -95,18 +97,18 @@ module Participant =
   let tryAcceptor a = match a with | (Acceptor x) -> Some x | _ -> None
   let tryProposer a = match a with | (Proposer x) -> Some x | _ -> None
   let tryLearner a = match a with | (Learner x) -> Some x | _ -> None
-  let tryClient a = match a with | (Client x) -> Some x | _ -> None
+  let tryExternal a = match a with | (External x) -> Some x | _ -> None
   
   let isAcceptor = tryAcceptor >> Option.isSome
   let isProposer = tryProposer >> Option.isSome
   let isLearner = tryLearner >> Option.isSome
-  let isClient = tryClient >> Option.isSome
+//  let isClient = tryClient >> Option.isSome
   let isParticipantType pt p =
     match (pt,p) with 
     | (AcceptorT, Acceptor _) -> true
     | (ProposerT, Proposer _) -> true
     | (LearnerT, Learner _) -> true
-    | (ClientT, Client _) -> true
+    | (ExternalT, External _) -> true
     | (_,_) -> false
 
   let output p = 
@@ -114,48 +116,48 @@ module Participant =
     | Acceptor x -> x.Output
     | Proposer x -> x.Output
     | Learner x -> x.Output
-    | Client x -> x.Output
+    | External x -> x.Output
 
   let input p = 
     match p with 
     | Acceptor x -> x.Input
     | Proposer x -> x.Input
     | Learner x -> x.Input
-    | Client x -> x.Input
+    | External x -> x.Input
 
   let name p =
     match p with 
     | Acceptor x -> x.Name
     | Proposer x -> x.Name
     | Learner x -> x.Name
-    | Client x -> x.Name
+    | External x -> x.Name
 
   let crashFor p rounds = 
     match p with 
     | Acceptor x -> x.CrashedFor <- rounds
-    | Proposer x -> x.CrashedFor <- rounds
-    | Learner x -> x.CrashedFor <- rounds
-    | Client x -> ()
+    | Proposer x -> ()
+    | Learner x -> ()
+    | External x -> ()
 
   let isCrashed p = 
     match p with 
     | Acceptor x -> x.CrashedFor > 0
-    | Proposer x -> x.CrashedFor > 0
-    | Learner x -> x.CrashedFor > 0
-    | Client x -> false
+    | Proposer x -> false
+    | Learner x -> false
+    | External x -> false
   
   let decCrashedFor p = 
     match p with 
     | Acceptor x -> if x.CrashedFor > 0 then x.CrashedFor <- x.CrashedFor - 1
-    | Proposer x -> if x.CrashedFor > 0 then x.CrashedFor <- x.CrashedFor - 1
-    | Learner x -> if x.CrashedFor > 0 then x.CrashedFor <- x.CrashedFor - 1
-    | Client x -> ()
+    | Proposer x -> ()
+    | Learner x -> ()
+    | External x -> ()
   
   let find d ps = ps |> Seq.filter (fun a -> name a = d) |> Seq.head
-  let findClient d ps = 
+  let findExternal d ps = 
     ps 
     |> Seq.filter (fun p -> name p = d) 
-    |> Seq.map (fun p -> match p with Client c -> c | _ -> failwith "not a client")
+    |> Seq.map (fun p -> match p with External c -> c | _ -> failwith "not an external")
     |> Seq.exactlyOne
   
   let allA ps =

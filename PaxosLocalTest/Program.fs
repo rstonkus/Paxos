@@ -14,8 +14,8 @@ let clusterOf3 () =
       Participant.acceptor "acceptor3"; 
       Participant.learner  "learner1";
       Participant.learner  "learner2";
-      Participant.client   "client1";
-      Participant.client   "client2";
+      Participant.external "external1";
+      Participant.external "external2";
     |];
   in (quorumSize,participants)
 
@@ -48,22 +48,22 @@ let increment (vo:Value option) : Value =
 
 [<Property(MaxTest = 100)>]
 let ``single round write and readwithDefault`` (seed:int) = 
-  let debug = false
+  let debug = true
   let (quorumSize, participants) = clusterOf3 ()
   let random = System.Random(seed)
 
   let result = { Run.Responses = [] }
-  let client1 = Participant.findClient "client1" participants
-  let client2 = Participant.findClient "client2" participants
+  let external1 = Participant.findExternal "external1" participants
+  let external2 = Participant.findExternal "external2" participants
   
 
   let guid1 = System.Guid.NewGuid()
-  let req1 = (Proposer "proposer1", CMsg (MClientRequest ((guid1,"client1"),"key1", atMostOnce writeV1 "client1" guid1)))
-  let () = Run.clientSend client1 req1
+  let req1 = (Proposer "proposer1", EMsg (MExternalRequest ("external1", ((guid1, "key1"), atMostOnce writeV1 "external1" guid1))))
+  let () = Run.externalReceive external1 req1
 
   let guid2 = System.Guid.NewGuid()
-  let req2 = (Proposer "proposer2", CMsg (MClientRequest ((guid2,"client2"),"key1", atMostOnce (readWithDefault "default") "client2" guid2)))
-  let () = Run.clientSend client2 req2
+  let req2 = (Proposer "proposer2", EMsg (MExternalRequest ("external2", ((guid2, "key2"), atMostOnce writeV1 "external2" guid1))))
+  let () = Run.externalReceive external2 req2
   
 
   let () = Run.runToEnd debug random false quorumSize participants result
@@ -91,17 +91,17 @@ let ``1000 increments by two clients`` (seed:int) =
   let random = System.Random(seed)
 
   let result = { Run.Responses = [] }
-  let client1 = Participant.findClient "client1" participants
-  let client2 = Participant.findClient "client2" participants
+  let external1 = Participant.findExternal "external1" participants
+  let external2 = Participant.findExternal "external2" participants
   
   let twoIncs () = 
     let guid1 = System.Guid.NewGuid()
-    let req1 = (Proposer "proposer1", CMsg (MClientRequest ((guid1,"client1"),"key1", atMostOnce increment "client1" guid1)))
-    let () = Run.clientSend client1 req1
+    let req1 = (Proposer "proposer1", EMsg (MExternalRequest ("external1", ((guid1, "key1"), atMostOnce increment "client1" guid1))))
+    let () = Run.externalReceive external1 req1
 
     let guid2 = System.Guid.NewGuid()
-    let req2 = (Proposer "proposer2", CMsg (MClientRequest ((guid2,"client2"),"key1", atMostOnce increment "client2" guid2)))
-    let () = Run.clientSend client2 req2
+    let req2 = (Proposer "proposer2", EMsg (MExternalRequest ("external2", ((guid2, "key2"), atMostOnce increment "client2" guid2))))
+    let () = Run.externalReceive external2 req2
     ()
   
   let it = 200
@@ -113,8 +113,8 @@ let ``1000 increments by two clients`` (seed:int) =
   let () = Seq.iter id bs
   let () = Run.runToEnd debug random false quorumSize participants result
   let g = System.Guid.NewGuid()
-  let r = (Proposer "proposer1", CMsg (MClientRequest ((g,"client1"),"key1", atMostOnce (readWithDefault "default") "client1" g)))
-  let () = Run.clientSend client1 r
+  let r = (Proposer "proposer1", EMsg (MExternalRequest ("external1", ((g, "key1"), atMostOnce increment "client1" g))))
+  let () = Run.externalReceive external1 r
   let () = Run.runToEnd debug random false quorumSize participants result
 
 
@@ -136,23 +136,23 @@ let ``1000 increments by two clients`` (seed:int) =
 
 [<EntryPoint>]
 let main argv = 
-  let b = ``1000 increments by two clients`` 753323514
-  printf "%b" b
+//  let b = ``single round write and readwithDefault`` 753323514
+//  printf "%b" b
 
-//  let rSeed = System.Random()
-//  let seed = rSeed.Next ()
-//  printfn "%i" seed
-//  let r = System.Random(seed)
-//  
-//  let bs = 
-//    seq {
-//      for i in 1 .. 1000 -> 
-//        let seed' = r.Next ()
-//        let () = printfn "%i" seed'
-//        in (seed',``1000 increments by two clients`` seed')
-//    }
-//  let s (i,b) = (sprintf "(%b,%i)" b i)
-//  printfn "%s" (System.String.Join (",\n", bs |> Seq.map s))
+  let rSeed = System.Random()
+  let seed = rSeed.Next ()
+  printfn "%i" seed
+  let r = System.Random(seed)
+  
+  let bs = 
+    seq {
+      for i in 1 .. 1000 -> 
+        let seed' = r.Next ()
+        let () = printfn "%i" seed'
+        in (seed',``single round write and readwithDefault`` seed')
+    }
+  let s (i,b) = (sprintf "(%b,%i)" b i)
+  printfn "%s" (System.String.Join (",\n", bs |> Seq.map s))
   0 // return an integer exit code
 
 
