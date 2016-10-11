@@ -161,7 +161,7 @@ module BasicPaxos =
   let proposerReceiveFromAcceptor (quorumSize:int) (s:PState) (m:AMsg) : (PState * (Destination * PMsg) option) =
     let ignore = (s,None)
     let retry (r:Request) n =
-      let (sender,session,f) = r
+      let (requester,session,f) = r
       let (g,k) = session
       in (PPrepareSent (n,r,[]), Some (BroadcastAcceptors, MPrepare (n,k)))
     match s with
@@ -181,12 +181,12 @@ module BasicPaxos =
       | MPromise (n', v') -> 
         if (n = n') //it is a promise in this session initiated by me
         then let promises' = v' :: promises
-             let (sender,session,f) = r
+             let (requester,session,f) = r
              if (isQuorum quorumSize promises')
              then let maxV = promises' |> latestValue
                   let v' = f maxV
                   //in (PReady n, Some (BroadcastAcceptors, MAccept(n,cs,k,v')))
-                  in (PAcceptSent(n, r, []), Some (BroadcastAcceptors, MAccept (n,sender,session,v'))) //send accept
+                  in (PAcceptSent(n, r, []), Some (BroadcastAcceptors, MAccept (n,requester,session,v'))) //send accept
              else (PPrepareSent(n, r, promises'), None) //wait for more promises
         else ignore //it can only be an old one, since it is a response to a request sent by us. Ignore
       | MAccepted _ -> ignore //Old => Ignore
@@ -198,7 +198,7 @@ module BasicPaxos =
     | PAcceptSent (n, cr, accepts) ->
       match m with
       | MPromise _ -> ignore //either from another session, or a promise that was not needed for this one. Ignore
-      | MAccepted (n', sender, session, v) ->
+      | MAccepted (n', requester, session, v) ->
         if (n = n') //it is an accept in this session initiated by me
         then let accepts' = (n,v) :: accepts
              if (isQuorum quorumSize accepts')
@@ -230,12 +230,12 @@ module BasicPaxos =
       else ignore 
 
 
-  let proposerReceiveRequest (cs:CState) (ps:PState) (now:Time) (MExternalRequest(sender,er):EMsg) : (CState * PState * (Destination * PMsg) option) =
+  let proposerReceiveRequest (cs:CState) (ps:PState) (now:Time) (MExternalRequest(requester,er):EMsg) : (CState * PState * (Destination * PMsg) option) =
     let handleRequest q n (er:ExternalRequest) = 
       let n' = n+1
       let (session,f) = er
       let (g,k) = session
-      let r = (sender,session,f)
+      let r = (requester,session,f)
       in (CActiveRequest (q,now,er), PPrepareSent (n',r,[]), Some (BroadcastAcceptors, MPrepare (n',k)))
     match cs with
     | CInitial ->
@@ -255,11 +255,11 @@ module BasicPaxos =
       if (n < n')
       then (AReady (n', store), Some (Proposer sender, MPromise (n', Map.tryFind k store)))
       else (AReady (n', store), Some (Proposer sender, MNackPrepare (n',n)))
-    | MAccept (n', sender, session, v') ->
+    | MAccept (n', requester, session, v') ->
       let (_, k') = session
       if (n <= n') 
       then let store' = Map.add k' (n',v') store
-           in (AReady (n', store'), Some (Broadcast, MAccepted (n', sender, session, v')))
+           in (AReady (n', store'), Some (Broadcast, MAccepted (n', requester, session, v')))
       else (AReady (n, store), Some (Proposer sender, MNackPrepare (n',n)))
 
   let acceptorReceiveFromAcceptor (AReady (n,store):AState) (m:AMsg) (sender:Sender) : (AState * (Destination * AMsg) option) =

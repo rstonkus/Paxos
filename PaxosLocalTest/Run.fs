@@ -87,7 +87,7 @@ module Run =
           if (g = guid)
           then Some v
           else None
-        | _ -> failwith "a msg from a non-learner sent the result"
+        | _ -> failwith "a msg from a non-learner sent to result"
       result.Responses |> Seq.choose f
   
     let responsesToClient name result =
@@ -221,13 +221,8 @@ module Run =
                  let (d,m) = (outBuf.Dequeue ())
                  if debug then printfn "Send msg: %s, %s" (Participant.name participant) (Format.msg m)
                  send name (d,m)
-          | _ -> ()
-//            if (reqsWaiting.Length <> 0)
-//            then let p = pickRandom reqsWaiting
-//                 if consumeRequestIfReady participants p
-//                 then if debug then printfn "%s: client request" p.Name else ()
-//                 else if debug then printfn "nop - proposer not ready to consume request" else ()
-//            else if debug then printfn "nop - no requests waiting for proposer" else ()
+          | _ -> 
+            
           
         | _ -> //maybe do something evil
           if (random.Next 50 <> 0)

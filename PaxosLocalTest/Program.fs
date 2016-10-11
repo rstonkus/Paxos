@@ -48,7 +48,7 @@ let increment (vo:Value option) : Value =
 
 [<Property(MaxTest = 100)>]
 let ``single round write and readwithDefault`` (seed:int) = 
-  let debug = true
+  let debug = false
   let (quorumSize, participants) = clusterOf3 ()
   let random = System.Random(seed)
 
@@ -86,7 +86,7 @@ let ``single round write and readwithDefault`` (seed:int) =
 
 [<Property(MaxTest = 10)>]
 let ``1000 increments by two clients`` (seed:int) = 
-  let debug = true
+  let debug = false
   let (quorumSize, participants) = clusterOf3 ()
   let random = System.Random(seed)
 
@@ -96,11 +96,11 @@ let ``1000 increments by two clients`` (seed:int) =
   
   let twoIncs () = 
     let guid1 = System.Guid.NewGuid()
-    let req1 = (Proposer "proposer1", EMsg (MExternalRequest ("external1", ((guid1, "key1"), atMostOnce increment "client1" guid1))))
+    let req1 = (Proposer "proposer1", EMsg (MExternalRequest ("external1", ((guid1, "key1"), atMostOnce increment "external1" guid1))))
     let () = Run.externalReceive external1 req1
 
     let guid2 = System.Guid.NewGuid()
-    let req2 = (Proposer "proposer2", EMsg (MExternalRequest ("external2", ((guid2, "key2"), atMostOnce increment "client2" guid2))))
+    let req2 = (Proposer "proposer2", EMsg (MExternalRequest ("external2", ((guid2, "key2"), atMostOnce increment "external2" guid2))))
     let () = Run.externalReceive external2 req2
     ()
   
@@ -113,7 +113,7 @@ let ``1000 increments by two clients`` (seed:int) =
   let () = Seq.iter id bs
   let () = Run.runToEnd debug random false quorumSize participants result
   let g = System.Guid.NewGuid()
-  let r = (Proposer "proposer1", EMsg (MExternalRequest ("external1", ((g, "key1"), atMostOnce increment "client1" g))))
+  let r = (Proposer "proposer1", EMsg (MExternalRequest ("external1", ((g, "key1"), atMostOnce increment "external1" g))))
   let () = Run.externalReceive external1 r
   let () = Run.runToEnd debug random false quorumSize participants result
 
@@ -136,9 +136,9 @@ let ``1000 increments by two clients`` (seed:int) =
 
 [<EntryPoint>]
 let main argv = 
-//  let b = ``single round write and readwithDefault`` 753323514
+//  let b = ``single round write and readwithDefault`` 566801040
 //  printf "%b" b
-
+  
   let rSeed = System.Random()
   let seed = rSeed.Next ()
   printfn "%i" seed
@@ -146,7 +146,7 @@ let main argv =
   
   let bs = 
     seq {
-      for i in 1 .. 1000 -> 
+      for i in 1 .. 100 -> 
         let seed' = r.Next ()
         let () = printfn "%i" seed'
         in (seed',``single round write and readwithDefault`` seed')
