@@ -123,8 +123,8 @@ module BasicPaxos =
   //                  AState = Map<Key,AStateOld>
 
   type CState =
-    | CInitial
-    | CActiveRequest of Queue<ExternalRequest> * Time * ExternalRequest
+    | CReady
+    | CActiveRequest of Queue<ExternalRequest> * Sender * Time * ExternalRequest
 
   type PState =
     //No session in progress. N = Last tried session that we know
@@ -158,22 +158,33 @@ module BasicPaxos =
     (List.maxBy (fun v -> match v with None -> -1 | Some (n,_) -> n) vs) |> Option.map snd
 
   //msg handlers
-  let proposerReceiveFromAcceptor (quorumSize:int) (s:PState) (m:AMsg) : (PState * (Destination * PMsg) option) =
-    let ignore = (s,None)
+  let proposerReceiveFromAcceptor (quorumSize:int) (now:Time) (cs:CState) (ps:PState) (m:AMsg) : (CState * PState * (Destination * PMsg) option) =
+    let ignore = (cs,ps,None)
     let retry (r:Request) n =
       let (requester,session,f) = r
       let (g,k) = session
-      in (PPrepareSent (n,r,[]), Some (BroadcastAcceptors, MPrepare (n,k)))
-    match s with
+      in (cs, PPrepareSent (n,r,[]), Some (BroadcastAcceptors, MPrepare (n,k)))
+    let next n =
+      match cs with
+      | CReady -> failwith "bug"
+      | CActiveRequest (q,requester,time,er) ->
+        if (q.Count = 0)
+        then (CReady, PReady n, None)
+        else let er = q.Dequeue ()
+             let (session,f) = er
+             let (g,k) = session
+             let r = (requester,session,f)
+             in (CActiveRequest (q,requester,now,er), PPrepareSent (n,r,[]), Some (BroadcastAcceptors, MPrepare (n,k)))
+    match ps with
     | PReady n -> //This session is initiated by another proposer
       match m with
       | MAccepted (n',_,_,_) -> 
         if (n' > n)
-        then (PReady n', None) //update session
+        then (cs, PReady n', None) //update session
         else ignore
       | MNackPrepare (_,n') ->
         if (n' > n)
-        then (PReady n',None)
+        then (cs, PReady n',None)
         else ignore
       | MPromise _ -> ignore
     | PPrepareSent (n, r, promises) ->
@@ -186,8 +197,8 @@ module BasicPaxos =
              then let maxV = promises' |> latestValue
                   let v' = f maxV
                   //in (PReady n, Some (BroadcastAcceptors, MAccept(n,cs,k,v')))
-                  in (PAcceptSent(n, r, []), Some (BroadcastAcceptors, MAccept (n,requester,session,v'))) //send accept
-             else (PPrepareSent(n, r, promises'), None) //wait for more promises
+                  in (cs, PAcceptSent(n, r, []), Some (BroadcastAcceptors, MAccept (n,requester,session,v'))) //send accept
+             else (cs, PPrepareSent(n, r, promises'), None) //wait for more promises
         else ignore //it can only be an old one, since it is a response to a request sent by us. Ignore
       | MAccepted _ -> ignore //Old => Ignore
       | MNackPrepare (n',newN) -> 
@@ -202,8 +213,9 @@ module BasicPaxos =
         if (n = n') //it is an accept in this session initiated by me
         then let accepts' = (n,v) :: accepts
              if (isQuorum quorumSize accepts')
-             then (PReady n, None) //session done, assume learner will answer client.
-             else (PAcceptSent (n,cr,accepts'), None) //collect accept
+             //session done, assume learner will answer client.
+             then next (n + 1)
+             else (cs, PAcceptSent (n,cr,accepts'), None) //collect accept
         else if (n < n')
              then retry cr (n' + 1)
              else ignore //it was an old one. Ignore
@@ -211,22 +223,22 @@ module BasicPaxos =
 
 
   //note that the client is modelled as running locally with the proposer 
-  let clientCheckActiveRequest (sender:Sender) (cs:CState) (ps:PState) (now:Time) (hastimedout:Time -> bool) : (CState * PState * (Destination * PMsg) option) =
+  let clientCheckActiveRequest (cs:CState) (ps:PState) (now:Time) (hastimedout:Time -> bool) : (CState * PState * (Destination * PMsg) option) =
     let ignore = (cs,ps,None)
-    let restart q n (er:ExternalRequest) = 
+    let restart q requester n (er:ExternalRequest) = 
       let n' = n+1
       let (session,f) = er
       let (g,k) = session
-      let r = (sender,session,f)
-      (CActiveRequest (q,now,er), PPrepareSent (n',r,[]), Some (BroadcastAcceptors, MPrepare (n',k)))
+      let r = (requester,session,f)
+      in (CActiveRequest (q,requester,now,er), PPrepareSent (n',r,[]), Some (BroadcastAcceptors, MPrepare (n',k)))
     match cs with
-    | CInitial -> ignore
-    | CActiveRequest (q,time,er) ->
+    | CReady -> ignore
+    | CActiveRequest (q,requester,time,er) ->
       if hastimedout time
       then match ps with
            | PReady _ -> failwith "Bug. A ready state should always start the next round immediately in case any is ready"
-           | PPrepareSent (n,_,_) -> restart q n er
-           | PAcceptSent (n,_,_) -> restart q n er
+           | PPrepareSent (n,_,_) -> restart q requester n er
+           | PAcceptSent (n,_,_) -> restart q requester n er
       else ignore 
 
 
@@ -236,15 +248,15 @@ module BasicPaxos =
       let (session,f) = er
       let (g,k) = session
       let r = (requester,session,f)
-      in (CActiveRequest (q,now,er), PPrepareSent (n',r,[]), Some (BroadcastAcceptors, MPrepare (n',k)))
+      in (CActiveRequest (q,requester, now,er), PPrepareSent (n',r,[]), Some (BroadcastAcceptors, MPrepare (n',k)))
     match cs with
-    | CInitial ->
+    | CReady ->
       match ps with
       | PReady n -> 
         let q = Queue<ExternalRequest>()
         in handleRequest q n er
       | _ -> failwith "Bug. When client is in CInitial, proposer cannot have an active session."
-    | CActiveRequest (q,_,_) ->
+    | CActiveRequest (q,_,_,_) ->
       let () = q.Enqueue er
       in (cs,ps,None)
 

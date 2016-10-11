@@ -60,7 +60,7 @@ module Participant =
   let freshAState = AReady (0,Map.empty)
   let freshPState = PReady 0
   let freshLState = LReady Map.empty
-  let freshCState = CInitial
+  let freshCState = CReady
 
   let proposer name = 
     Proposer { 
@@ -183,6 +183,19 @@ module Participant =
     ps 
     |> Seq.filter isAcceptor 
     |> Seq.iter (sendTo m)
+
+  let isDone p =
+    match p with
+    | Proposer x -> 
+      match (x.CState, x.Input.Count, x.Output.Count) with
+      | (CReady, 0, 0) -> true
+      | _ -> false
+    | Acceptor x ->
+      (x.Input.Count = 0 && x.Output.Count = 0) || x.CrashedFor > 0
+    | Learner x ->
+      x.Input.Count = 0 && x.Output.Count = 0
+    | External x ->
+      x.Input.Count = 0 && x.Output.Count = 0
 
 
 

@@ -16,8 +16,8 @@ module Format =
 
   let cState (s:CState) =
     match s with
-    | CInitial -> "CInitial"
-    | CActiveRequest (q,t,er) -> sprintf "CActiveRequest q=%i, t=%i" q.Count t
+    | CReady -> "CInitial"
+    | CActiveRequest (q,req,t,er) -> sprintf "CActiveRequest q=%i, t=%i" q.Count t
 
   let aState (AReady (n,store):AState) =
     sprintf "AReady (%i, %A)" n store
@@ -42,7 +42,7 @@ module Format =
 
   let eMsg (m:EMsg) =
     match m with
-    | MExternalRequest (sender, ((g,k),f)) -> sprintf "MClientRequest (%s,%s)" (g.ToString()) k
+    | MExternalRequest (sender, ((g,k),f)) -> sprintf "MExternalRequest (%s,%s)" (g.ToString()) k
 
   let msg (m:Msg) =
     match m with
@@ -150,11 +150,12 @@ module Run =
                         Option.iter p.Output.Enqueue outDestMsgO
                         p.PState <- ps'
                         p.CState <- cs'
-      | AMsg amsg -> let (s',outMsgO) = proposerReceiveFromAcceptor quorumSize p.PState amsg
+      | AMsg amsg -> let (cs',ps',outMsgO) = proposerReceiveFromAcceptor quorumSize time p.CState p.PState amsg
                      do let outDestMsgO = outMsgO |> Option.map wrapP
-                        printDebug p.CState s' outDestMsgO
+                        printDebug p.CState ps' outDestMsgO
                         Option.iter p.Output.Enqueue outDestMsgO
-                        p.PState <- s'
+                        p.PState <- ps'
+                        p.CState <- cs'
       | _ -> failwithf "Proposer received unexpected message %A" msg
     | Participant.Learner l ->
       let (sender, msg) = l.Input.Dequeue ()
@@ -172,6 +173,14 @@ module Run =
       let (sender, msg) = c.Input.Dequeue ()
       result.Responses <- (c.Name, sender, msg) :: result.Responses
 
+  let checkTimeout debug (p:Participant.Proposer) t hasTimedOut =
+    let (cs',ps',outMsgO) = clientCheckActiveRequest p.CState p.PState t hasTimedOut
+    let outDestMsgO = outMsgO |> Option.map wrapP
+    if debug then printfn "Check timeout, %s --> (%s,%s) out: %s" p.Name (Format.cState cs') (Format.pState ps') (Format.option Format.destMsg outDestMsgO)
+    p.CState <- cs'
+    p.PState <- ps'
+    Option.iter p.Output.Enqueue (outDestMsgO)
+
   let unfinishedParticipants ps =
     let canSend =
       ps
@@ -186,21 +195,27 @@ module Run =
 
     in (canHandle,canSend)
 
+  let hasTimedOut now reqTime = 
+    now - reqTime > 200
+
+
   let runToEnd (debug:bool) (random:System.Random) emulateMessageLosses quorumSize participants result = 
     let pickRandom xs =
       let length = Array.length xs
       let i = random.Next length
       in xs.[i]
+    let calcNotDone () = participants |> Seq.forall Participant.isDone |> not 
     let consume = consumeMsg debug quorumSize participants result
     let send = sendMsg participants
     let mutable unfinished = unfinishedParticipants participants //not counting client inputs
-    let mutable c = true
+    let mutable notDone = participants |> Seq.forall Participant.isDone |> not
     let mutable time = 0
-    while c
+    while notDone
       do
         //printfn "-------------------------\n%A" participants
         
         let (canHandle,canSend) = unfinished
+        if (Array.isEmpty canHandle) then printf ""
         match random.Next 5 with
         |0|1|2|3 -> //progress
           if debug then printfn "-------------- %i --------------\n%s" time (Format.participants participants)
@@ -219,11 +234,12 @@ module Run =
                  let name = Participant.name participant
                  let outBuf = Participant.output participant
                  let (d,m) = (outBuf.Dequeue ())
-                 if debug then printfn "Send msg: %s, %s" (Participant.name participant) (Format.msg m)
+                 if debug then printfn "Send msg: %s, %s" (Participant.name participant) (Format.destMsg (d,m))
                  send name (d,m)
+          //check timeouts
           | _ -> 
-            ()
-          
+            let p = pickRandom (participants |> Seq.choose Participant.tryProposer |> Seq.toArray)
+            in checkTimeout debug p time (hasTimedOut time)
         | _ -> //maybe do something evil
           if (random.Next 50 <> 0)
           then () // P(evil) = 1/5 * 1/20 = 1/100
@@ -241,8 +257,7 @@ module Run =
                          //toCrash.AState <- Participant.freshAState
         let () = participants |> Seq.iter Participant.decCrashedFor
         unfinished <- unfinishedParticipants participants
-        let (canHandle,canSend) = unfinished
-        c <- not (Array.isEmpty canHandle) || not (Array.isEmpty canSend)
+        notDone <- calcNotDone()
         time <- time + 1
   
   let drainQueue (buf:Queue<'a>) = 
