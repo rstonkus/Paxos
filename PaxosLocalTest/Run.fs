@@ -222,7 +222,7 @@ module Run =
                  if debug then printfn "Send msg: %s, %s" (Participant.name participant) (Format.msg m)
                  send name (d,m)
           | _ -> 
-            
+            ()
           
         | _ -> //maybe do something evil
           if (random.Next 50 <> 0)
