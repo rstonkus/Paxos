@@ -79,6 +79,7 @@ module BasicPaxos =
     | Broadcast
     | BroadcastAcceptors
     | External of Sender
+    | Acceptor of Sender
   
 
   type VersionedValueLastTouched = N * ValueLastTouched 
@@ -88,7 +89,7 @@ module BasicPaxos =
   type LearnerStore = Map<Key, N * Sender list> //Sender is necessary in order to make sure that it is not a duplicate
 
   //Request
-  type Operation = ValueLastTouched option -> ValueLastTouched
+  type Operation = string * (ValueLastTouched option -> ValueLastTouched)
   type RequestSession = Guid * Key
   type Request = Sender * RequestSession * Operation
   type ExternalRequest = RequestSession * Operation
@@ -112,6 +113,8 @@ module BasicPaxos =
     //Sent in response to a Prepare to only the requesting proposer
     //in case the acceptor is ahead of the proposed session n.
     | MNackPrepare of N * N//session n, head n at acceptor (It will not accept smaller ns)
+    | MSyncRequest
+    | MSyncResponse of N * AcceptorStore
 
   type EMsg =
     | MExternalRequest of Sender * ExternalRequest
@@ -138,6 +141,7 @@ module BasicPaxos =
     | PAcceptSent of N * Request * VersionedValueLastTouched list// I sent accept with n,v, received accept list so far
 
   type AState =
+    | ASync of N list * AcceptorStore * (N * Sender) list //(incremental updates handled(i.e. accepted messages) , merged store, sources from which we have received store)
     | AReady of N * AcceptorStore//previous highest proposed
 
   type LState =
@@ -192,7 +196,8 @@ module BasicPaxos =
       | MPromise (n', v') -> 
         if (n = n') //it is a promise in this session initiated by me
         then let promises' = v' :: promises
-             let (requester,session,f) = r
+             let (requester,session,op) = r
+             let (fname,f) = op
              if (isQuorum quorumSize promises')
              then let maxV = promises' |> latestValue
                   let v' = f maxV
@@ -205,6 +210,7 @@ module BasicPaxos =
         if (n = n')
         then retry r (newN+1)
         else ignore
+      | MSyncRequest _ -> ignore
     
     | PAcceptSent (n, cr, accepts) ->
       match m with
@@ -261,22 +267,83 @@ module BasicPaxos =
       in (cs,ps,None)
 
 
-  let acceptorReceiveFromProposer (AReady (n,store):AState) (m:PMsg) (sender:Sender) : (AState * (Destination * AMsg) option) =
-    match m with
-    | MPrepare (n',k) -> 
-      if (n < n')
-      then (AReady (n', store), Some (Proposer sender, MPromise (n', Map.tryFind k store)))
-      else (AReady (n', store), Some (Proposer sender, MNackPrepare (n',n)))
-    | MAccept (n', requester, session, v') ->
-      let (_, k') = session
-      if (n <= n') 
-      then let store' = Map.add k' (n',v') store
-           in (AReady (n', store'), Some (Broadcast, MAccepted (n', requester, session, v')))
-      else (AReady (n, store), Some (Proposer sender, MNackPrepare (n',n)))
+  let acceptorReceiveFromProposer (s:AState) (m:PMsg) (sender:Sender) : (AState * (Destination * AMsg) option) =
+    let ignore = (s, None)
+    match s with
+    | AReady (n,store) -> 
+      match m with
+      | MPrepare (n',k) -> 
+        if (n < n')
+        then (AReady (n', store), Some (Proposer sender, MPromise (n', Map.tryFind k store)))
+        else (AReady (n, store), Some (Proposer sender, MNackPrepare (n',n)))
+      | MAccept (n', requester, session, v') ->
+        let (_, k') = session
+        if (n <= n') 
+        then let store' = Map.add k' (n',v') store
+             in (AReady (n', store'), Some (Broadcast, MAccepted (n', requester, session, v')))
+        else (AReady (n, store), Some (Proposer sender, MNackPrepare (n',n)))
+    | ASync _ -> ignore
 
-  let acceptorReceiveFromAcceptor (AReady (n,store):AState) (m:AMsg) (sender:Sender) : (AState * (Destination * AMsg) option) =
-    let ignore = (AReady (n,store), None)
-    ignore //TODO
+  let acceptorRestart () : (AState * (Destination * AMsg)) =
+    let s = ASync ([], Map.empty, [])
+    let d = (BroadcastAcceptors, MSyncRequest)
+    in (s, d)
+
+  let acceptorReceiveFromAcceptor (quorumSize:int) (s:AState) (m:AMsg) (sender:Sender) : (AState * (Destination * AMsg) option) =
+    let ignore = (s, None)
+    let addIfNewer k (n,v) (m:AcceptorStore) =
+      match Map.tryFind k m with
+        | None -> Map.add k (n,v) m
+        | Some (n',v') -> if (n > n')
+                          then Map.add k (n,v) m
+                          else m
+    let mergeStores mstore store = 
+      Map.fold (fun m k v -> addIfNewer k v m) mstore store
+    match s with
+    | AReady (n,store) -> 
+      match m with 
+      | MAccepted (n',requester,(g,k),v) ->
+        let store' = addIfNewer k (n',v) store
+        if n' > n
+        then (AReady (n',store'), None)
+        else (AReady (n,store'), None) //store' might be unmodified
+      | MSyncRequest ->
+        (s, Some (Acceptor sender, MSyncResponse (n,store)))
+      | _ -> ignore
+
+    | ASync (ns,store,votes) -> 
+      match m with
+      | MAccepted (n',requester,(g,k),v) ->
+        match ns with
+        | [] -> 
+          let store' = addIfNewer k (n',v) store
+          in (ASync ([n'],store',votes), None)
+        | n :: ns -> 
+          let nMax = Seq.max (n::ns)
+          if n' > nMax
+          then let store' = addIfNewer k (n',v) store
+               in (ASync (n'::ns,store',votes), None)
+          else ignore
+        
+      | MSyncResponse (mn,mstore) ->
+        if (Seq.exists (snd >> ((=) sender)) votes)
+        then ignore
+        else let store' = mergeStores mstore store //take newest from each
+             let votes' = (mn,sender) :: votes
+             if (isQuorum quorumSize votes')
+             then let maxFromStore = Map.fold (fun m k (n,v) -> max m n) 0 store'
+                  match ns with
+                  | [] -> (AReady (maxFromStore,store'),None)
+                  | _ -> //let maxN = Seq.max ns //here we might need to check for sequence of the collected list mentioned in above TODO
+                         //let newN = max maxN maxFromStore
+                         (AReady (maxFromStore,store'),None)
+             else (ASync (ns,store',votes'),None)
+        
+      //dont respond to session messages while synching
+      | MPromise (n,vvo) -> ignore
+      | MNackPrepare (n,n') -> ignore
+      | MSyncRequest -> ignore
+      
 
   let learnerReceiveFromAcceptor (LReady store : LState) (m:AMsg) (sender:Sender) (quorumSize:int): (LState * (Destination * LMsg) option) = 
     let ignore = (LReady store, None)
@@ -284,8 +351,7 @@ module BasicPaxos =
       let store' = Map.add k (n, [sender]) store //update store to reflect one vote
       in (LReady store', None) //never quorum with just one
     match m with
-    //| MAccepted (n, (guid,clientSender), k, v) -> 
-    | MAccepted (n, clientSender, session, v) -> 
+    | MAccepted (n, requester, session, v) -> 
       let (guid,k) = session
       let storeV = Map.tryFind k store
       match storeV with
@@ -295,7 +361,7 @@ module BasicPaxos =
         then let votes' = sender :: votes //collect vote first
              let store' = Map.add k (nStore,votes') store //update store
              in if ((not (isQuorum quorumSize votes)) && (isQuorum quorumSize votes')) //if we got to quorum this time
-                then (LReady store', Some (External clientSender, MResponse (guid,v)))
+                then (LReady store', Some (External requester, MResponse (guid,v)))
                 else (LReady store', None)
         else if (n > nStore)
              then firstVote k n //new vote round
@@ -303,4 +369,5 @@ module BasicPaxos =
     //these are not meant to be received by learner
     | MPromise _ -> ignore
     | MNackPrepare _ -> ignore
+    | MSyncRequest _ -> ignore
     

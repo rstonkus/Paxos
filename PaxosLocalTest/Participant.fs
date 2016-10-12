@@ -102,14 +102,6 @@ module Participant =
   let isAcceptor = tryAcceptor >> Option.isSome
   let isProposer = tryProposer >> Option.isSome
   let isLearner = tryLearner >> Option.isSome
-//  let isClient = tryClient >> Option.isSome
-  let isParticipantType pt p =
-    match (pt,p) with 
-    | (AcceptorT, Acceptor _) -> true
-    | (ProposerT, Proposer _) -> true
-    | (LearnerT, Learner _) -> true
-    | (ExternalT, External _) -> true
-    | (_,_) -> false
 
   let output p = 
     match p with 
@@ -139,19 +131,18 @@ module Participant =
     | Learner x -> ()
     | External x -> ()
 
+  let isAlive x = 
+    let isReady a = 
+      (match a.AState with | AReady _ -> true | _ -> false)
+    x.CrashedFor = 0 && isReady x
+  
   let isCrashed p = 
     match p with 
-    | Acceptor x -> x.CrashedFor > 0
+    | Acceptor x -> x.CrashedFor <> 0
     | Proposer x -> false
     | Learner x -> false
     | External x -> false
-  
-  let decCrashedFor p = 
-    match p with 
-    | Acceptor x -> if x.CrashedFor > 0 then x.CrashedFor <- x.CrashedFor - 1
-    | Proposer x -> ()
-    | Learner x -> ()
-    | External x -> ()
+
   
   let find d ps = ps |> Seq.filter (fun a -> name a = d) |> Seq.head
   let findExternal d ps = 

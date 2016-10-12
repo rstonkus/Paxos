@@ -11,16 +11,18 @@ module Format =
   let pState (s:PState) =
     match s with
     | PReady n -> sprintf "PReady %i" n
-    | PPrepareSent (n,cr,vvos) -> sprintf "PPrepareSent %i" n
-    | PAcceptSent (n,cr,vvs) -> sprintf "PPrepareSent %i" n
+    | PPrepareSent (n,cr,vvos) -> sprintf "PPrepareSent %i [%i]" n vvos.Length
+    | PAcceptSent (n,cr,vvs) -> sprintf "PPrepareSent %i [%i]" n vvs.Length
 
   let cState (s:CState) =
     match s with
     | CReady -> "CInitial"
-    | CActiveRequest (q,req,t,er) -> sprintf "CActiveRequest q=%i, t=%i" q.Count t
+    | CActiveRequest (q,req,t,(session,(fname,f))) -> sprintf "CActiveRequest q=%i, t=%i, f=%s" q.Count t fname
 
-  let aState (AReady (n,store):AState) =
-    sprintf "AReady (%i, %A)" n store
+  let aState (s:AState) =
+    match s with
+      | AReady (n,store) -> sprintf "AReady (%i, %A)" n store
+      | ASync (ns, store, votes) -> sprintf "%A" s
 
   let lState (LReady store) =
     sprintf "%A" store
@@ -35,6 +37,8 @@ module Format =
     | MPromise (n,vvo) -> sprintf "MPromise (%i,%A)" n vvo
     | MAccepted (n,sender,(g,k),v) -> sprintf "MAccepted (%i,%s,%A)" n k v
     | MNackPrepare (n,n') -> sprintf "MNackPrepare (%i,%i)" n n'
+    | MSyncRequest -> sprintf "MSyncRequest"
+    | MSyncResponse (n,store)-> sprintf "MSyncResponse (%i,%A)" n store
 
   let lMsg (m:LMsg) =
     match m with
@@ -110,6 +114,8 @@ module Run =
     | (Proposer d, (AMsg (MNackPrepare _) as msg)) -> send msg d
     | (Broadcast, (AMsg (MAccepted _) as msg)) -> broadcast msg
     | (External d, (LMsg (MResponse _) as msg)) -> send msg d
+    | (BroadcastAcceptors, (AMsg (MSyncRequest _) as msg)) -> broadcastA msg
+    | (Acceptor d, (AMsg (MSyncResponse _) as msg)) -> send msg d
     | _ -> failwithf "bad message destination %A" m
   
   let wrapA (d,m) = (d,AMsg m)
@@ -118,7 +124,7 @@ module Run =
   let wrapE (d,m) = (d,EMsg m)
   
 
-  let consumeMsg debug quorumSize participants result time (p:Participant.Participant) =
+  let consumeMsg debug quorumSize result time (p:Participant.Participant) =
     match p with
     | Participant.Acceptor a ->
       let (sender, msg) = a.Input.Dequeue ()
@@ -132,7 +138,7 @@ module Run =
                         printDebug s' outDestMsgO
                         Option.iter a.Output.Enqueue outDestMsgO
                         a.AState <- s'
-      | AMsg amsg -> let (s',outMsgO) = acceptorReceiveFromAcceptor a.AState amsg sender
+      | AMsg amsg -> let (s',outMsgO) = acceptorReceiveFromAcceptor quorumSize a.AState amsg sender
                      do let outDestMsgO = outMsgO |> Option.map wrapA
                         printDebug s' outDestMsgO
                         Option.iter a.Output.Enqueue outDestMsgO
@@ -181,6 +187,21 @@ module Run =
     p.PState <- ps'
     Option.iter p.Output.Enqueue (outDestMsgO)
 
+  let decCrashedForAndWakeup debug p = 
+    match p with 
+    | Participant.Acceptor x -> 
+      if x.CrashedFor = 1 
+      then let (s',m) = acceptorRestart ()
+           x.Output.Enqueue (wrapA m)
+           x.AState <- s'
+           x.CrashedFor <- 0
+           if debug then printfn "Waking up %s..." x.Name
+
+      if x.CrashedFor > 1 then x.CrashedFor <- x.CrashedFor - 1
+    | Participant.Proposer x -> ()
+    | Participant.Learner x -> ()
+    | Participant.External x -> () 
+
   let unfinishedParticipants ps =
     let canSend =
       ps
@@ -197,15 +218,14 @@ module Run =
 
   let hasTimedOut now reqTime = 
     now - reqTime > 200
-
-
+    
   let runToEnd (debug:bool) (random:System.Random) emulateMessageLosses quorumSize participants result = 
     let pickRandom xs =
       let length = Array.length xs
       let i = random.Next length
       in xs.[i]
     let calcNotDone () = participants |> Seq.forall Participant.isDone |> not 
-    let consume = consumeMsg debug quorumSize participants result
+    let consume = consumeMsg debug quorumSize result
     let send = sendMsg participants
     let mutable unfinished = unfinishedParticipants participants //not counting client inputs
     let mutable notDone = participants |> Seq.forall Participant.isDone |> not
@@ -213,9 +233,12 @@ module Run =
     while notDone
       do
         //printfn "-------------------------\n%A" participants
-        
+        //if time = 416 then printf ""
+        participants |> Seq.iter (decCrashedForAndWakeup debug)
+
         let (canHandle,canSend) = unfinished
         if (Array.isEmpty canHandle) then printf ""
+
         match random.Next 5 with
         |0|1|2|3 -> //progress
           if debug then printfn "-------------- %i --------------\n%s" time (Format.participants participants)
@@ -244,7 +267,7 @@ module Run =
           if (random.Next 50 <> 0)
           then () // P(evil) = 1/5 * 1/20 = 1/100
           else let all =  Participant.allA participants
-               let alive = all |> Seq.filter (fun a -> a.CrashedFor = 0) |> Seq.toArray
+               let alive = all |> Seq.filter Participant.isAlive |> Seq.toArray
                if(Seq.length alive <= quorumSize) 
                then if debug then printfn "nop - too many crashed" else () //we cannot crash more according to assumptions
                else let toCrash = pickRandom alive
@@ -255,7 +278,7 @@ module Run =
                     if (random.Next 2 = 0)
                     then if debug then printfn "XXX Reset state of %s" toCrash.Name
                          //toCrash.AState <- Participant.freshAState
-        let () = participants |> Seq.iter Participant.decCrashedFor
+        let () = participants |> Seq.iter (decCrashedForAndWakeup debug)
         unfinished <- unfinishedParticipants participants
         notDone <- calcNotDone()
         time <- time + 1
