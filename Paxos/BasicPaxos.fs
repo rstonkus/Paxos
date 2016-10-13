@@ -64,8 +64,7 @@ module BasicPaxos =
 //     |         |<---------X--X--X------>|->|  Accepted(N,I+1,W)
 //     |<---------------------------------X--X  Response
 //     |         |          |  |  |       |  |
-//TODO 
-// replication to acceptor when starting up
+
   
   type Time = int
   type N = int
@@ -155,11 +154,6 @@ module BasicPaxos =
   //helpers
   let isQuorum quorumSize xs = quorumSize <= Seq.length xs
   
-//  let hasTimedOut time =
-//    let now = DateTime.Now
-//    now - time > (TimeSpan.FromSeconds 2.0)
-    
-
   let latestValue (vs:(VersionedValueLastTouched option) list) : ValueLastTouched option = 
     (List.maxBy (fun v -> match v with None -> -1 | Some (n,_) -> n) vs) |> Option.map snd
 
@@ -340,11 +334,9 @@ module BasicPaxos =
              if (isQuorum quorumSize votes')
              then let maxFromStore = Map.fold (fun m k (n,v) -> max m n) 0 store'
                   let minSafe = maxFromStore + proposerCount //we might have promised to all proposers. Since other acceptors might not know, we have to cancel these.
-                  match ns with
-                  | [] -> (AReady (minSafe,store'),None)
-                  | _ -> let maxN = Seq.max ns //here we might need to check for sequence of the collected list mentioned in above TODO
-                         let newN = max maxN minSafe
-                         (AReady (newN,store'),None)
+                  let maxN = Seq.max (mn :: ns) //here we might need to check for sequence of the collected list mentioned in above TODO
+                  let newN = max maxN minSafe
+                  in (AReady (newN,store'),None)
              else (ASync (mn :: ns,store',votes'),None)
         
       //dont respond to session messages while synching

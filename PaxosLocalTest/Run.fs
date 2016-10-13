@@ -234,8 +234,8 @@ module Run =
     while notDone
       do
         //printfn "-------------------------\n%A" participants
-//        if time = 233731 then debug <- true
-//        if time = 240000 then debug <- false
+//        if time = 0 then debug <- true
+//        if time = 15000 then debug <- false
         participants |> Seq.iter (decCrashedForAndWakeup debug)
 
         let (canHandle,canSend) = unfinished

@@ -104,7 +104,7 @@ let ``single round write and readwithDefault`` (seed:int) =
   always && (case1 || case2)
 
 
-[<Property(Arbitrary = [||], MaxTest = 10)>]
+[<Property(MaxTest = 3)>]
 let ``2000 increments by two clients`` (seed:int) = 
   let (quorumSize, participants) = clusterOf3 ()
   let random = System.Random(seed)
@@ -150,7 +150,7 @@ let ``2000 increments by two clients`` (seed:int) =
 
   //verify
   let vs = Run.Verify.responsesToGuid g result
-  let responses = result.Responses |> List.map (fun (_,_,LMsg (MResponse (g,v))) -> v) |> List.toArray
+//  let responses = result.Responses |> List.map (fun (_,_,LMsg (MResponse (g,v))) -> v) |> List.toArray
 //  printfn "%A" responses.[0]
   printf "."
 
@@ -167,7 +167,7 @@ let ``2000 increments by two clients`` (seed:int) =
 [<EntryPoint>]
 let main argv = 
 //  debug <- true
-//  let b = ``2000 increments by two clients`` 463898373
+//  let b = ``2000 increments by two clients`` 236011772
 //  printf "%b" b
   
   let rSeed = System.Random()
