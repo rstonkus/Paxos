@@ -12,7 +12,7 @@ module Format =
     match s with
     | PReady n -> sprintf "PReady %i" n
     | PPrepareSent (n,cr,vvos) -> sprintf "PPrepareSent %i [%i]" n vvos.Length
-    | PAcceptSent (n,cr,vvs) -> sprintf "PPrepareSent %i [%i]" n vvs.Length
+    | PAcceptSent (n,cr,vvs) -> sprintf "PAcceptSent %i [%i]" n vvs.Length
 
   let cState (s:CState) =
     match s with
@@ -138,7 +138,7 @@ module Run =
                         printDebug s' outDestMsgO
                         Option.iter a.Output.Enqueue outDestMsgO
                         a.AState <- s'
-      | AMsg amsg -> let (s',outMsgO) = acceptorReceiveFromAcceptor quorumSize a.AState amsg sender
+      | AMsg amsg -> let (s',outMsgO) = acceptorReceiveFromAcceptor 2 quorumSize a.AState amsg sender
                      do let outDestMsgO = outMsgO |> Option.map wrapA
                         printDebug s' outDestMsgO
                         Option.iter a.Output.Enqueue outDestMsgO
@@ -182,7 +182,7 @@ module Run =
   let checkTimeout debug (p:Participant.Proposer) t hasTimedOut =
     let (cs',ps',outMsgO) = clientCheckActiveRequest p.CState p.PState t hasTimedOut
     let outDestMsgO = outMsgO |> Option.map wrapP
-    if debug then printfn "Check timeout, %s --> (%s,%s) out: %s" p.Name (Format.cState cs') (Format.pState ps') (Format.option Format.destMsg outDestMsgO)
+    //if debug then printfn "Check timeout, %s --> (%s,%s) out: %s" p.Name (Format.cState cs') (Format.pState ps') (Format.option Format.destMsg outDestMsgO)
     p.CState <- cs'
     p.PState <- ps'
     Option.iter p.Output.Enqueue (outDestMsgO)
@@ -195,7 +195,7 @@ module Run =
            x.Output.Enqueue (wrapA m)
            x.AState <- s'
            x.CrashedFor <- 0
-           if debug then printfn "Waking up %s..." x.Name
+           //if debug then printfn "Waking up %s..." x.Name
 
       if x.CrashedFor > 1 then x.CrashedFor <- x.CrashedFor - 1
     | Participant.Proposer x -> ()
@@ -219,21 +219,23 @@ module Run =
   let hasTimedOut now reqTime = 
     now - reqTime > 200
     
-  let runToEnd (debug:bool) (random:System.Random) emulateMessageLosses quorumSize participants result = 
+  let runToEnd (debugIn:bool) (random:System.Random) emulateMessageLosses quorumSize participants result = 
+    let mutable debug = debugIn
     let pickRandom xs =
       let length = Array.length xs
       let i = random.Next length
       in xs.[i]
     let calcNotDone () = participants |> Seq.forall Participant.isDone |> not 
-    let consume = consumeMsg debug quorumSize result
     let send = sendMsg participants
+    
     let mutable unfinished = unfinishedParticipants participants //not counting client inputs
     let mutable notDone = participants |> Seq.forall Participant.isDone |> not
     let mutable time = 0
     while notDone
       do
         //printfn "-------------------------\n%A" participants
-        //if time = 416 then printf ""
+//        if time = 233731 then debug <- true
+//        if time = 240000 then debug <- false
         participants |> Seq.iter (decCrashedForAndWakeup debug)
 
         let (canHandle,canSend) = unfinished
@@ -241,23 +243,23 @@ module Run =
 
         match random.Next 5 with
         |0|1|2|3 -> //progress
-          if debug then printfn "-------------- %i --------------\n%s" time (Format.participants participants)
           match random.Next 6 with
           //consume message -- 1 message consumed can result in 4 messages sent (broadcast -- assuming cluster size 3)
           | 0 | 1 | 2 -> 
             if (Array.isEmpty canHandle)
-            then if debug then printfn "nop - nothing to handle" else ()
+            then ()//if debug then printfn "nop - nothing to handle" else ()
             else let participant = pickRandom canHandle
-                 consume time participant
+                 if debug then printfn "-------------- %i --------------\n%s" time (Format.participants participants)
+                 consumeMsg debug quorumSize result time participant
           //send message
           | 3 | 4 -> 
             if (Array.isEmpty canSend)
-            then if debug then printfn "nop - nothing to send" else ()
+            then ()//if debug then printfn "nop - nothing to send" else ()
             else let participant = pickRandom canSend
                  let name = Participant.name participant
                  let outBuf = Participant.output participant
                  let (d,m) = (outBuf.Dequeue ())
-                 if debug then printfn "Send msg: %s, %s" (Participant.name participant) (Format.destMsg (d,m))
+                 //if debug then printfn "Send msg: %s, %s" (Participant.name participant) (Format.destMsg (d,m))
                  send name (d,m)
           //check timeouts
           | _ -> 
@@ -269,19 +271,20 @@ module Run =
           else let all =  Participant.allA participants
                let alive = all |> Seq.filter Participant.isAlive |> Seq.toArray
                if(Seq.length alive <= quorumSize) 
-               then if debug then printfn "nop - too many crashed" else () //we cannot crash more according to assumptions
+               then ()//if debug then printfn "nop - too many crashed" //we cannot crash more according to assumptions
                else let toCrash = pickRandom alive
                     let rounds = (random.Next 100) + 10 //at least 10 rounds
-                    if debug then printfn "XXX Crashing %s for %i rounds" toCrash.Name rounds
+                    //if debug then printfn "XXX Crashing %s for %i rounds" toCrash.Name rounds
                     if emulateMessageLosses then toCrash.Input.Clear()
                     toCrash.CrashedFor <- rounds
                     if (random.Next 2 = 0)
-                    then if debug then printfn "XXX Reset state of %s" toCrash.Name
+                    then ()//if debug then printfn "XXX Reset state of %s" toCrash.Name
                          //toCrash.AState <- Participant.freshAState
         let () = participants |> Seq.iter (decCrashedForAndWakeup debug)
         unfinished <- unfinishedParticipants participants
         notDone <- calcNotDone()
         time <- time + 1
+//    printfn "time:%i" time
   
   let drainQueue (buf:Queue<'a>) = 
     let mutable l = []

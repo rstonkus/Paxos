@@ -133,6 +133,8 @@ module BasicPaxos =
     //No session in progress. N = Last tried session that we know
     | PReady of N 
     //State of collecting promises in order to reach quorum
+
+    //TODO In these cases we must verify the quorum voters
     | PPrepareSent of N * Request * (VersionedValueLastTouched option) list // I sent proposal with n,v, received promise list so far
     //State of collecting accepted messages 
     //this is a potential stuck state, since we are not guaranteed to receive MAccepted from quorum 
@@ -140,14 +142,14 @@ module BasicPaxos =
     //    in case another proposer initiates a session, we will however have progress.
     | PAcceptSent of N * Request * VersionedValueLastTouched list// I sent accept with n,v, received accept list so far
 
+    
+
   type AState =
     | ASync of N list * AcceptorStore * (N * Sender) list //(incremental updates handled(i.e. accepted messages) , merged store, sources from which we have received store)
     | AReady of N * AcceptorStore//previous highest proposed
 
   type LState =
     | LReady of LearnerStore
-
-
 
 
   //helpers
@@ -191,6 +193,8 @@ module BasicPaxos =
         then (cs, PReady n',None)
         else ignore
       | MPromise _ -> ignore
+      | MSyncRequest _ -> ignore
+      | MSyncResponse _ -> ignore
     | PPrepareSent (n, r, promises) ->
       match m with
       | MPromise (n', v') -> 
@@ -211,6 +215,7 @@ module BasicPaxos =
         then retry r (newN+1)
         else ignore
       | MSyncRequest _ -> ignore
+      | MSyncResponse _ -> ignore
     
     | PAcceptSent (n, cr, accepts) ->
       match m with
@@ -226,6 +231,8 @@ module BasicPaxos =
              then retry cr (n' + 1)
              else ignore //it was an old one. Ignore
       | MNackPrepare _ -> ignore //it could have only come from an old session
+      | MSyncRequest _ -> ignore
+      | MSyncResponse _ -> ignore
 
 
   //note that the client is modelled as running locally with the proposer 
@@ -289,7 +296,7 @@ module BasicPaxos =
     let d = (BroadcastAcceptors, MSyncRequest)
     in (s, d)
 
-  let acceptorReceiveFromAcceptor (quorumSize:int) (s:AState) (m:AMsg) (sender:Sender) : (AState * (Destination * AMsg) option) =
+  let acceptorReceiveFromAcceptor (proposerCount:int) (quorumSize:int) (s:AState) (m:AMsg) (sender:Sender) : (AState * (Destination * AMsg) option) =
     let ignore = (s, None)
     let addIfNewer k (n,v) (m:AcceptorStore) =
       match Map.tryFind k m with
@@ -332,12 +339,13 @@ module BasicPaxos =
              let votes' = (mn,sender) :: votes
              if (isQuorum quorumSize votes')
              then let maxFromStore = Map.fold (fun m k (n,v) -> max m n) 0 store'
+                  let minSafe = maxFromStore + proposerCount //we might have promised to all proposers. Since other acceptors might not know, we have to cancel these.
                   match ns with
-                  | [] -> (AReady (maxFromStore,store'),None)
-                  | _ -> //let maxN = Seq.max ns //here we might need to check for sequence of the collected list mentioned in above TODO
-                         //let newN = max maxN maxFromStore
-                         (AReady (maxFromStore,store'),None)
-             else (ASync (ns,store',votes'),None)
+                  | [] -> (AReady (minSafe,store'),None)
+                  | _ -> let maxN = Seq.max ns //here we might need to check for sequence of the collected list mentioned in above TODO
+                         let newN = max maxN minSafe
+                         (AReady (newN,store'),None)
+             else (ASync (mn :: ns,store',votes'),None)
         
       //dont respond to session messages while synching
       | MPromise (n,vvo) -> ignore
@@ -370,4 +378,5 @@ module BasicPaxos =
     | MPromise _ -> ignore
     | MNackPrepare _ -> ignore
     | MSyncRequest _ -> ignore
+    | MSyncResponse _ -> ignore
     

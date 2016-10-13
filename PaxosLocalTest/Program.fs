@@ -3,6 +3,9 @@ open Paxos.BasicPaxos.Test
 open FsCheck.Xunit
 open System
 
+
+let mutable debug = false
+
 let clusterOf3 () =
   let quorumSize = 2
   let participants = 
@@ -53,7 +56,7 @@ let prependId (id:string) (vo:Value option) : Value =
     id+" "+v
 
 let twoOp op1 op2 (vo:Value option) : Value =
-    match vo with
+  match vo with
   | None -> 
     op1 None + ";" + op2 None
   | Some v -> 
@@ -64,7 +67,6 @@ let twoOp op1 op2 (vo:Value option) : Value =
 
 [<Property(MaxTest = 100)>]
 let ``single round write and readwithDefault`` (seed:int) = 
-  let debug = false
   let (quorumSize, participants) = clusterOf3 ()
   let random = System.Random(seed)
 
@@ -102,9 +104,8 @@ let ``single round write and readwithDefault`` (seed:int) =
   always && (case1 || case2)
 
 
-[<Property(Arbitrary = [], MaxTest = 10)>]
-let ``1000 increments by two clients`` (seed:int) = 
-  let debug = true
+[<Property(Arbitrary = [||], MaxTest = 10)>]
+let ``2000 increments by two clients`` (seed:int) = 
   let (quorumSize, participants) = clusterOf3 ()
   let random = System.Random(seed)
 
@@ -115,8 +116,8 @@ let ``1000 increments by two clients`` (seed:int) =
   let twoIncs i = 
     let guid1 = System.Guid.NewGuid()
     let opName1 = sprintf "(1,%i)" i
-    let sop1 = twoOp increment (prependId opName1)
-//    let sop1 = increment
+//    let sop1 = twoOp increment (prependId opName1)
+    let sop1 = increment
     let op1 = (opName1, atMostOnce sop1 "external1" guid1)
 
     let req1 = (Proposer "proposer1", EMsg (MExternalRequest ("external1", ((guid1, "key"), op1))))
@@ -124,8 +125,8 @@ let ``1000 increments by two clients`` (seed:int) =
 
     let guid2 = System.Guid.NewGuid()
     let opName2 = sprintf "(2,%i)" i
-    let sop2 = twoOp increment (prependId opName2)
-//    let sop2 = increment
+//    let sop2 = twoOp increment (prependId opName2)
+    let sop2 = increment
     let op2 = (opName2, atMostOnce sop2 "external2" guid2)
 
     let req2 = (Proposer "proposer2", EMsg (MExternalRequest ("external2", ((guid2, "key"), op2))))
@@ -149,8 +150,7 @@ let ``1000 increments by two clients`` (seed:int) =
 
   //verify
   let vs = Run.Verify.responsesToGuid g result
-//  let responses = result.Responses |> List.map (fun (_,_,LMsg (MResponse (g,v))) -> v) |> List.toArray
-//  printfn "%A" participants
+  let responses = result.Responses |> List.map (fun (_,_,LMsg (MResponse (g,v))) -> v) |> List.toArray
 //  printfn "%A" responses.[0]
   printf "."
 
@@ -166,20 +166,21 @@ let ``1000 increments by two clients`` (seed:int) =
 
 [<EntryPoint>]
 let main argv = 
-  let b = ``1000 increments by two clients`` 1657376195 //865019295
-  printf "%b" b
+//  debug <- true
+//  let b = ``2000 increments by two clients`` 463898373
+//  printf "%b" b
   
-//  let rSeed = System.Random()
-//  let seed = rSeed.Next ()
-//  printfn "%i" seed
-//  let r = System.Random(seed)
-//  
-//  let bs = 
-//    seq {
-//      for i in 1 .. 100000 -> 
-//        let seed' = r.Next ()
-//        in (seed',``1000 increments by two clients`` seed')
-//    }
-//  let s (i,b) = (sprintf "(%b,%i)" b i)
-//  printfn "%s" (System.String.Join (",\n", bs |> Seq.filter (fun (seed,b) -> not b) |> Seq.map s))
+  let rSeed = System.Random()
+  let seed = rSeed.Next ()
+  printfn "%i" seed
+  let r = System.Random(seed)
+  
+  let bs = 
+    seq {
+      for i in 1 .. 100000 -> 
+        let seed' = r.Next ()
+        in (seed',``2000 increments by two clients`` seed')
+    }
+  let s (i,b) = (sprintf "(%b,%i)" b i)
+  printfn "%s" (System.String.Join (",\n", bs |> Seq.filter (fun (seed,b) -> not b) |> Seq.map s))
   0 // return an integer exit code
