@@ -3,13 +3,6 @@
 open Paxos.BasicPaxos
 open System.Collections.Generic
 
-
-type Msg =
-  | AMsg of AMsg
-  | PMsg of PMsg
-  | LMsg of LMsg
-  | EMsg of EMsg
-
 module Participant =
   type Acceptor = 
     { 

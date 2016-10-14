@@ -70,7 +70,7 @@ module BasicPaxos =
   type N = int
   type Sender = string
   type Key = string
-  type Value = string
+  type Value = string option
   type ValueLastTouched = Value * (Sender * Guid) list //"sender*guid list" makes it possible to check for execution of a concrete operation
   
   type Destination =
@@ -88,7 +88,7 @@ module BasicPaxos =
   type LearnerStore = Map<Key, N * Sender list> //Sender is necessary in order to make sure that it is not a duplicate
 
   //Request
-  type Operation = string * (ValueLastTouched option -> ValueLastTouched)
+  type Operation = Operation of string * (ValueLastTouched option -> ValueLastTouched)
   type RequestSession = Guid * Key
   type Request = Sender * RequestSession * Operation
   type ExternalRequest = RequestSession * Operation
@@ -118,6 +118,11 @@ module BasicPaxos =
   type EMsg =
     | MExternalRequest of Sender * ExternalRequest
 
+  type Msg =
+    | AMsg of AMsg
+    | PMsg of PMsg
+    | LMsg of LMsg
+    | EMsg of EMsg
 
   //For now the session state is shared by all keys. This is suboptimal if one wants more than one value in the system.
   //It could be extended to support several concurrent keys (and adjusting the code accordingly): 
@@ -194,8 +199,7 @@ module BasicPaxos =
       | MPromise (n', v') -> 
         if (n = n') //it is a promise in this session initiated by me
         then let promises' = v' :: promises
-             let (requester,session,op) = r
-             let (fname,f) = op
+             let (requester,session,Operation (fname,f)) = r
              if (isQuorum quorumSize promises')
              then let maxV = promises' |> latestValue
                   let v' = f maxV

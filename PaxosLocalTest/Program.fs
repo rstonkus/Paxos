@@ -1,7 +1,7 @@
-﻿open Paxos.BasicPaxos
+﻿open Paxos
+open Paxos.BasicPaxos
 open Paxos.BasicPaxos.Test
 open FsCheck.Xunit
-open System
 
 
 let mutable debug = false
@@ -22,46 +22,22 @@ let clusterOf3 () =
     |];
   in (quorumSize,participants)
 
-let atMostOnce (f:Value option -> Value) (sender:Sender) (g:Guid) (vo:ValueLastTouched option) : ValueLastTouched =
-  match vo with
-  | None -> (f None,[(sender,g)])
-  | Some (v,xs) -> 
-    let xo = List.tryFind (fun (_,guid) -> guid = g) xs
-    match xo with
-    | None -> let xs' = List.filter (fst >> (<>) sender) xs
-              in (f (Some v), (sender,g)::xs')
-    | Some _ -> (v,xs) //same req, we leave it untouched
 
-//a simple mutator that always writes "v1"
-let writeV1 (vo:Value option) : Value = "v1"
 
-//read with default
-let readWithDefault d (vo:Value option) : Value = 
-  match vo with
-  | None -> d
-  | Some v -> v
-
-let increment (vo:Value option) : Value = 
-  match vo with
-  | None -> "1"
-  | Some v -> 
-    let i = System.Int32.Parse v
-    in (i + 1).ToString()
-
-let prependId (id:string) (vo:Value option) : Value = 
+let prependId (i:string) (vo:Value) : Value = 
   match vo with
   | None -> 
-    id
+    Some i
   | Some v -> 
-    id+" "+v
+    Some (i+" "+v)
 
-let twoOp op1 op2 (vo:Value option) : Value =
-  match vo with
-  | None -> 
-    op1 None + ";" + op2 None
-  | Some v -> 
-    let splitted = v.Split ';'
-    op1 (Some splitted.[0]) + ";" + op2 (Some splitted.[1])
+//let twoOp op1 op2 (vo:Value) : Value =
+//  match vo with
+//  | None -> 
+//    op1 None + ";" + op2 None
+//  | Some v -> 
+//    let splitted = v.Split ';'
+//    op1 (Some splitted.[0]) + ";" + op2 (Some splitted.[1])
 
 
 
@@ -74,14 +50,15 @@ let ``single round write and readwithDefault`` (seed:int) =
   let external1 = Participant.findExternal "external1" participants
   let external2 = Participant.findExternal "external2" participants
   
+  let write = Operations.write (Some "v1")
 
   let guid1 = System.Guid.NewGuid()
-  let op1 = ("writev1",atMostOnce writeV1 "external1" guid1)
+  let op1 = Operations.atMostOnce write "external1" guid1
   let req1 = (Proposer "proposer1", EMsg (MExternalRequest ("external1", ((guid1, "key1"), op1))))
   let () = Run.externalReceive external1 req1
 
   let guid2 = System.Guid.NewGuid()
-  let op2 = ("writev1",atMostOnce writeV1 "external2" guid2)
+  let op2 = Operations.atMostOnce write "external2" guid2
   let req2 = (Proposer "proposer2", EMsg (MExternalRequest ("external2", ((guid2, "key2"), op2))))
   let () = Run.externalReceive external2 req2
   
@@ -98,9 +75,9 @@ let ``single round write and readwithDefault`` (seed:int) =
   let allEq1 = Seq.forall (fst >> (=) v1) v1s
   let allEq2 = Seq.forall (fst >> (=) v2) v2s
   
-  let always = v1 = "v1" && allEq1 && allEq2
-  let case1 = v2 = "default"
-  let case2 = v2 = "v1"
+  let always = v1 = Some "v1" && allEq1 && allEq2
+  let case1 = v2 = Some "default"
+  let case2 = v2 = Some "v1"
   always && (case1 || case2)
 
 
@@ -115,19 +92,13 @@ let ``2000 increments by two clients`` (seed:int) =
   
   let twoIncs i = 
     let guid1 = System.Guid.NewGuid()
-    let opName1 = sprintf "(1,%i)" i
-//    let sop1 = twoOp increment (prependId opName1)
-    let sop1 = increment
-    let op1 = (opName1, atMostOnce sop1 "external1" guid1)
+    let op1 = Operations.atMostOnce Operations.increment "external1" guid1
 
     let req1 = (Proposer "proposer1", EMsg (MExternalRequest ("external1", ((guid1, "key"), op1))))
     let () = Run.externalReceive external1 req1
 
     let guid2 = System.Guid.NewGuid()
-    let opName2 = sprintf "(2,%i)" i
-//    let sop2 = twoOp increment (prependId opName2)
-    let sop2 = increment
-    let op2 = (opName2, atMostOnce sop2 "external2" guid2)
+    let op2 = Operations.atMostOnce Operations.increment "external2" guid2
 
     let req2 = (Proposer "proposer2", EMsg (MExternalRequest ("external2", ((guid2, "key"), op2))))
     let () = Run.externalReceive external2 req2
@@ -142,7 +113,7 @@ let ``2000 increments by two clients`` (seed:int) =
   let () = Seq.iter id bs
   let () = Run.runToEnd debug random false quorumSize participants result
   let g = System.Guid.NewGuid()
-  let readop = ("read",atMostOnce (readWithDefault "d") "external1" g)
+  let readop = Operations.atMostOnce (Operations.readWithDefault (Some "d")) "external1" g
   let r = (Proposer "proposer1", EMsg (MExternalRequest ("external1", ((g, "key"), readop))))
   let () = Run.externalReceive external1 r
   let () = Run.runToEnd debug random false quorumSize participants result
@@ -158,7 +129,7 @@ let ``2000 increments by two clients`` (seed:int) =
   let v = Seq.head vs |> fst //there must be one anyway
   let allEq = Seq.forall (fst >> (=) v) vs
   
-  let always = v = ((2*it).ToString ()) && allEq
+  let always = v = Some ((2*it).ToString ()) && allEq
   if(not always) then printf "(E %i)" seed
   always
   

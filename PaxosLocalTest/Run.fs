@@ -17,7 +17,7 @@ module Format =
   let cState (s:CState) =
     match s with
     | CReady -> "CInitial"
-    | CActiveRequest (q,req,t,(session,(fname,f))) -> sprintf "CActiveRequest q=%i, t=%i, f=%s" q.Count t fname
+    | CActiveRequest (q,req,t,(session,Operation (fname,f))) -> sprintf "CActiveRequest q=%i, t=%i, f=%s" q.Count t fname
 
   let aState (s:AState) =
     match s with
