@@ -1,5 +1,6 @@
-Paxos is an implementation of the basic Paxos algoritm originally described in
-[Wikipedia](http://research.microsoft.com/en-us/um/people/lamport/pubs/pubs.html#time-clocks). See [Wikipedia](https://en.wikipedia.org/wiki/Paxos_(computer_science)), for a more accessible explanation.
+## Paxos
+This is an implementation of the basic Paxos algoritm originally described by Leslie Lamport in
+[Time, Clocks and the Ordering of Events in a Distributed System](http://research.microsoft.com/en-us/um/people/lamport/pubs/pubs.html#time-clocks). See also [Wikipedia](https://en.wikipedia.org/wiki/Paxos_(computer_science)), for a more accessible explanation.
 
 ## Functionality
 
@@ -48,7 +49,7 @@ So, it is crutial to support retries. The core algorithm defines time as
 ```
 And it is the user of the library that defines the timeout
 ```fsharp
-   hastimedout:Time -> bool
+  hastimedout:Time -> bool
 ```
 If the timeout is set too low, it might cause an infinite loop of retries! 
 
@@ -65,14 +66,14 @@ The following pseudo fsharp shows the essence of the emulator
         match random.Next 5 with
         |0|1|2|3 -> //progress
           match random.Next 6 with
-          | 0 | 1 | 2 -> consume 1 message by 1 randomly chosen participant
-          | 3 | 4 -> send
-          | _ -> checkTimeout
+          | 0 | 1 | 2 -> ``consume 1 message by 1 randomly chosen participant``
+          | 3 | 4 -> ``send``
+          | _ -> ``checkTimeout``
         | _ ->
           if (random.Next 50 <> 0)  // P(evil) = 1/5 * 1/20 = 1/100
           then () 
-          else if (possible to crash without breaking the quorum) //TODO This should not be necessary
-		       then crash random participant for x rounds + clear input messages
+          else if (``possible to crash without breaking the quorum``) //TODO This should not be necessary
+		       then ``crash random participant for x rounds + clear input messages``
 ```
 
 Since the processes are randomly interleaved, a crash might not manifest as "not receiving new messages", 
@@ -91,6 +92,6 @@ of directing the requests to one proposer at a time.
 
 ## TODOs (and known bugs)
 
- - [] The emulator does currently not duplicate messages, and in fact the algorithm does not yet handle this scenario. It could however easily be extended to do so.
- - [] The quorum check before crashing a process in the emulator should not be necessary
+ - The emulator does currently not duplicate messages, and in fact the algorithm does not yet handle this scenario. It could however easily be extended to do so.
+ - The quorum check before crashing a process in the emulator should not be necessary
 
