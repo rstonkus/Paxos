@@ -57,7 +57,7 @@ If the timeout is set too low, it might cause an infinite loop of retries!
 
 I have included an operator that can be used as leader election between servies using the library.
 
-The idea is (courtesy of Rasmus Feldthaus Hansen - he very much ignited this idea)
+The idea is (courtesy of @ildhesten - he very much ignited this idea)
  - Represent leaderStatus as (leader,lease)
  - Each participant who is not the leader, will decrement lease by 1
  - The leader will renew its lease to `lease`. I.e. `lease` will function as the timeout.
