@@ -66,7 +66,7 @@ module BasicPaxos =
 //     |         |          |  |  |       |  |
 
   
-  type Time = int
+  type Time = int64
   type N = int
   type Sender = string
   type Key = string
@@ -124,6 +124,9 @@ module BasicPaxos =
     | LMsg of LMsg
     | EMsg of EMsg
 
+
+
+
   //For now the session state is shared by all keys. This is suboptimal if one wants more than one value in the system.
   //It could be extended to support several concurrent keys (and adjusting the code accordingly): 
   //Essentially: type PState = Map<Key,PStateOld>
@@ -154,6 +157,17 @@ module BasicPaxos =
 
   type LState =
     | LReady of LearnerStore
+
+
+  let wrapA (d,m) = (d,AMsg m)
+  let wrapP (d,m) = (d,PMsg m)
+  let wrapL (d,m) = (d,LMsg m)
+  let wrapE (d,m) = (d,EMsg m)
+
+  let freshAState = AReady (0,Map.empty)
+  let freshPState = PReady 0
+  let freshLState = LReady Map.empty
+  let freshCState = CReady
 
 
   //helpers
@@ -253,7 +267,7 @@ module BasicPaxos =
       else ignore 
 
 
-  let proposerReceiveRequest (cs:CState) (ps:PState) (now:Time) (MExternalRequest(requester,er):EMsg) : (CState * PState * (Destination * PMsg) option) =
+  let proposerReceiveFromExternal (cs:CState) (ps:PState) (now:Time) (MExternalRequest(requester,er):EMsg) : (CState * PState * (Destination * PMsg) option) =
     let handleRequest q n (er:ExternalRequest) = 
       let n' = n+1
       let (session,f) = er
@@ -376,3 +390,4 @@ module BasicPaxos =
     | MSyncRequest _ -> ignore
     | MSyncResponse _ -> ignore
     
+  

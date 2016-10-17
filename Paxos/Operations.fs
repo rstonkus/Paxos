@@ -6,7 +6,7 @@ module Operations =
   let newName (name:string) (Operation (_,f):Operation) : Operation =
     Operation (name,f)
 
-  let atMostOnce ((fname,f):string * (Value -> Value)) (sender:Sender) (g:System.Guid) : Operation =
+  let idempotent ((fname,f):string * (Value -> Value)) (sender:Sender) (g:System.Guid) : Operation =
     let op vo = 
       match vo with
       | None -> (f None,[(sender,g)])

@@ -118,11 +118,7 @@ module Run =
     | (Acceptor d, (AMsg (MSyncResponse _) as msg)) -> send msg d
     | _ -> failwithf "bad message destination %A" m
   
-  let wrapA (d,m) = (d,AMsg m)
-  let wrapP (d,m) = (d,PMsg m)
-  let wrapL (d,m) = (d,LMsg m)
-  let wrapE (d,m) = (d,EMsg m)
-  
+ 
 
   let consumeMsg debug quorumSize result time (p:Participant.Participant) =
     match p with
@@ -150,7 +146,7 @@ module Run =
         if debug 
         then printfn "%s <- (%s,%s) --> (%s,%s) out: %s" p.Name sender (Format.msg msg) (Format.cState c') (Format.pState s') (Format.option Format.destMsg outDestMsgO)
       match msg with
-      | EMsg emsg -> let (cs',ps',outMsgO) = proposerReceiveRequest p.CState p.PState time emsg
+      | EMsg emsg -> let (cs',ps',outMsgO) = proposerReceiveFromExternal p.CState p.PState time emsg
                      do let outDestMsgO = outMsgO |> Option.map wrapP
                         printDebug cs' ps' outDestMsgO
                         Option.iter p.Output.Enqueue outDestMsgO
@@ -217,7 +213,7 @@ module Run =
     in (canHandle,canSend)
 
   let hasTimedOut now reqTime = 
-    now - reqTime > 200
+    now - reqTime > 200L
     
   let runToEnd (debugIn:bool) (random:System.Random) emulateMessageLosses quorumSize participants result = 
     let mutable debug = debugIn
@@ -230,7 +226,7 @@ module Run =
     
     let mutable unfinished = unfinishedParticipants participants //not counting client inputs
     let mutable notDone = participants |> Seq.forall Participant.isDone |> not
-    let mutable time = 0
+    let mutable time = 0L
     while notDone
       do
         //printfn "-------------------------\n%A" participants
@@ -283,7 +279,7 @@ module Run =
         let () = participants |> Seq.iter (decCrashedForAndWakeup debug)
         unfinished <- unfinishedParticipants participants
         notDone <- calcNotDone()
-        time <- time + 1
+        time <- time + 1L
 //    printfn "time:%i" time
   
   let drainQueue (buf:Queue<'a>) = 

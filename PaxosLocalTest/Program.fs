@@ -53,12 +53,12 @@ let ``single round write and readwithDefault`` (seed:int) =
   let write = Operations.write (Some "v1")
 
   let guid1 = System.Guid.NewGuid()
-  let op1 = Operations.atMostOnce write "external1" guid1
+  let op1 = Operations.idempotent write "external1" guid1
   let req1 = (Proposer "proposer1", EMsg (MExternalRequest ("external1", ((guid1, "key1"), op1))))
   let () = Run.externalReceive external1 req1
 
   let guid2 = System.Guid.NewGuid()
-  let op2 = Operations.atMostOnce write "external2" guid2
+  let op2 = Operations.idempotent write "external2" guid2
   let req2 = (Proposer "proposer2", EMsg (MExternalRequest ("external2", ((guid2, "key2"), op2))))
   let () = Run.externalReceive external2 req2
   
@@ -92,13 +92,13 @@ let ``2000 increments by two clients`` (seed:int) =
   
   let twoIncs i = 
     let guid1 = System.Guid.NewGuid()
-    let op1 = Operations.atMostOnce Operations.increment "external1" guid1
+    let op1 = Operations.idempotent Operations.increment "external1" guid1
 
     let req1 = (Proposer "proposer1", EMsg (MExternalRequest ("external1", ((guid1, "key"), op1))))
     let () = Run.externalReceive external1 req1
 
     let guid2 = System.Guid.NewGuid()
-    let op2 = Operations.atMostOnce Operations.increment "external2" guid2
+    let op2 = Operations.idempotent Operations.increment "external2" guid2
 
     let req2 = (Proposer "proposer2", EMsg (MExternalRequest ("external2", ((guid2, "key"), op2))))
     let () = Run.externalReceive external2 req2
@@ -113,7 +113,7 @@ let ``2000 increments by two clients`` (seed:int) =
   let () = Seq.iter id bs
   let () = Run.runToEnd debug random false quorumSize participants result
   let g = System.Guid.NewGuid()
-  let readop = Operations.atMostOnce (Operations.readWithDefault (Some "d")) "external1" g
+  let readop = Operations.idempotent (Operations.readWithDefault (Some "d")) "external1" g
   let r = (Proposer "proposer1", EMsg (MExternalRequest ("external1", ((g, "key"), readop))))
   let () = Run.externalReceive external1 r
   let () = Run.runToEnd debug random false quorumSize participants result

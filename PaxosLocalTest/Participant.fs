@@ -22,7 +22,7 @@ module Participant =
       //mutable CrashedFor : int
     }
   type Learner = 
-    { 
+    {
       Name : string
       Output : Queue<Destination * Msg>
       Input : Queue<string * Msg>
@@ -50,10 +50,7 @@ module Participant =
     | Learner of Learner
     | External of External
 
-  let freshAState = AReady (0,Map.empty)
-  let freshPState = PReady 0
-  let freshLState = LReady Map.empty
-  let freshCState = CReady
+
 
   let proposer name = 
     Proposer { 
