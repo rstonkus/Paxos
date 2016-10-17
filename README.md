@@ -53,6 +53,47 @@ And it is the user of the library that defines the timeout
 ```
 If the timeout is set too low, it might cause an infinite loop of retries! 
 
+### Leader election
+
+I have included an operator that can be used as leader election between servies using the library.
+
+The idea is (courtesy of Rasmus Feldthaus Hansen - he very much ignited this idea)
+ - Represent leaderStatus as (leader,lease)
+ - Each participant who is not the leader, will decrement lease by 1
+ - The leader will renew its lease to `lease`. I.e. `lease` will function as the timeout.
+
+Example:
+  3 participants
+  leaderElection is applied every 1s by each participant
+  `lease` is 4
+  
+  Then: Initially, the value will be None, and the first come will be the leader, and set its lease to `lease`
+  All other participants will decrease his lease by 1, => lease is now 2
+  If the leader goes down, he will not be able to renew his lease. And so the other two participants will decrease his lease.
+  The participant who sets the current lease to 0, will obtain leadership, and initialize his lease to `lease`
+  
+  Whenever the current leader fails to renew his lease, he has to shutdown.
+  The effective timeout (potential downtime) is 2 rounds
+
+```fsharp
+  let leaderElection (participant:string) (lease:int) : string * (Value -> Value) =
+    let f (vo:Value) : string = 
+      match vo with
+      | None -> 
+        participant + "," + (lease.ToString())
+      | Some v -> 
+        let s = v.Split(',');
+        let leader = s.[0]
+        let coins = System.Int32.Parse(s.[1])
+        if (leader = participant)
+        then leader + "," + (lease.ToString()) //preserve leader as me
+        else if (coins = 0)
+             then participant + "," + (lease.ToString()) //choose new leader
+             else leader + "," + ((lease-1).ToString())//preserve other leader
+    in ("leaderElection",f >> Some)
+```
+
+
 ## Test
 
 The core algorithm implemented in BasicPaxos.fs has been thouroughly tested by emulating a distributed system.
