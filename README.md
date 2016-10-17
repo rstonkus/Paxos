@@ -42,6 +42,14 @@ Idempotency is implemented using
     Operation (fname, op)
 ```
 
+If you are using the idempotency wrapper, the operation signature is
+```fsharp
+  f :: string * (Value -> Value)
+```
+
+
+
+
 Even though people claim that paxos does not get stuck, I fail to see how it is possible (messages can be lost).
 So, it is crutial to support retries. The core algorithm defines time as
 ```fsharp
