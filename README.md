@@ -1,6 +1,6 @@
 ## Paxos
 This is an implementation of the basic Paxos algoritm originally described by Leslie Lamport in
-[Time, Clocks and the Ordering of Events in a Distributed System](http://research.microsoft.com/en-us/um/people/lamport/pubs/pubs.html#time-clocks). See also [Wikipedia](https://en.wikipedia.org/wiki/Paxos_(computer_science)), for a more accessible explanation.
+[The Part-Time Parliament](http://research.microsoft.com/en-us/um/people/lamport/pubs/pubs.html#lamport-paxos). See also [Wikipedia](https://en.wikipedia.org/wiki/Paxos_(computer_science)), for a more accessible explanation.
 
 ## Functionality
 
