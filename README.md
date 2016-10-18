@@ -85,6 +85,7 @@ Example:
   The effective timeout (potential downtime) is 2 rounds
 
 ```fsharp
+  //Untested !
   let leaderElection (participant:string) (lease:int) : string * (Value -> Value) =
     let f (vo:Value) : string = 
       match vo with
