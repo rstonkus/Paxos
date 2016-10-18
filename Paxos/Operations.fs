@@ -70,5 +70,5 @@ module Operations =
         then leader + "," + (lease.ToString()) //preserve leader as me
         else if (coins = 0)
              then participant + "," + (lease.ToString()) //choose new leader
-             else leader + "," + ((lease-1).ToString())//preserve other leader
+             else leader + "," + ((coins-1).ToString())//preserve other leader
     in ("leaderElection",f >> Some)
