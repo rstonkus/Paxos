@@ -51,7 +51,7 @@ If you are using the idempotency wrapper, the operation signature is
 
 
 Even though people claim that paxos does not get stuck, I fail to see how it is possible (messages can be lost).
-So, it is crutial to support retries. The core algorithm defines time as
+So, it is crucial to support retries. The core algorithm defines time as
 ```fsharp
   type Time = int64
 ```
