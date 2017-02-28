@@ -143,6 +143,6 @@ of directing the requests to one proposer at a time.
 
 ## TODOs (and known bugs)
 
- - The emulator does currently not duplicate messages, and in fact the algorithm does not yet handle this scenario. It could however easily be extended to do so.
+ - The emulator does not currently duplicate messages, and in fact the algorithm does not yet handle this scenario. It could however easily be extended to do so.
  - The quorum check before crashing a process in the emulator should not be necessary
 
